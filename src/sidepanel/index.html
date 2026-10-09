@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jeco</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <span class="rule" aria-hidden="true"></span>
+        <div>
+          <p class="eyebrow">Brave</p>
+          <h1>Jeco</h1>
+        </div>
+      </div>
+      <button type="button" id="settings-toggle" class="text-button">Settings</button>
+    </header>
+
+    <section id="settings" class="settings" hidden>
+      <label class="field">
+        <span>OpenRouter key</span>
+        <input id="api-key" type="password" autocomplete="off" spellcheck="false" />
+      </label>
+      <label class="field">
+        <span>Model</span>
+        <input id="model" type="text" spellcheck="false" />
+      </label>
+      <button type="button" id="save-key" class="button">Save key</button>
+      <p id="key-note" class="note"></p>
+
+      <div class="sites-head">
+        <h2>Sites</h2>
+        <p>Jeco starts with none. Interaction is on. Posting stays off until you enable it.</p>
+      </div>
+      <form id="add-site" class="add-site">
+        <input id="site-host" type="text" placeholder="youtube.com" spellcheck="false" />
+        <button type="submit" class="button">Add</button>
+      </form>
+      <p id="site-note" class="note"></p>
+      <ul id="sites" class="sites"></ul>
+    </section>
+
+    <ol id="steps" class="steps"></ol>
+    <div id="log" class="log"></div>
+
+    <section id="confirm" class="confirm" hidden>
+      <h2>Confirm</h2>
+      <p id="confirm-text"></p>
+      <div class="row">
+        <button type="button" id="confirm-yes" class="button">Post it</button>
+        <button type="button" id="confirm-no" class="button quiet">Don't post</button>
+      </div>
+    </section>
+
+    <form id="composer" class="composer">
+      <label class="field">
+        <span>Task</span>
+        <textarea id="task" rows="3" placeholder="Find a video, open a page, or draft a post"></textarea>
+      </label>
+      <div class="row">
+        <button type="submit" id="run" class="button">Run</button>
+        <button type="button" id="stop" class="button quiet" hidden>Stop</button>
+      </div>
+    </form>
+    <p class="foot">Page text from each step is sent to OpenRouter. Logins stay in Brave.</p>
+    <script src="panel.js"></script>
+  </body>
+</html>
