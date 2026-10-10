@@ -10,15 +10,26 @@ export type SiteGrant = {
   post: boolean;
 };
 
+export type SavedTask = {
+  name: string;
+  task: string;
+};
+
 export type Settings = {
   apiKey: string;
   model: string;
+  backupModel: string;
+  baseUrl: string;
+  savedTasks: SavedTask[];
   sites: SiteGrant[];
 };
 
 export const EMPTY_SETTINGS: Settings = {
   apiKey: "",
   model: DEFAULT_MODEL,
+  backupModel: "",
+  baseUrl: "",
+  savedTasks: [],
   sites: [],
 };
 
@@ -36,7 +47,8 @@ export type PageCommand =
   | { op: "type"; ref: number; text: string }
   | { op: "scroll"; dy: number }
   | { op: "clickNamed"; names: string[] }
-  | { op: "commitPost"; text: string; ref?: number };
+  | { op: "commitPost"; text: string; ref?: number }
+  | { op: "frame"; ref: number };
 
 export type PageResult =
   | {
@@ -48,6 +60,12 @@ export type PageResult =
       elements: PageElement[];
     }
   | { ok: true; op: "click" | "type" | "scroll" | "clickNamed" | "commitPost"; detail: string }
+  | {
+      ok: true;
+      op: "frame";
+      detail: string;
+      rect: { x: number; y: number; width: number; height: number };
+    }
   | { ok: false; error: string };
 
 export type ToolCall =
@@ -82,6 +100,7 @@ export interface BrowserPort {
   urlOf(tabId: number): Promise<string | null>;
   close(tabId: number): Promise<void>;
   back(tabId: number): Promise<void>;
+  capture(tabId: number): Promise<string | null>;
 }
 
 export type ModelToolCall = {

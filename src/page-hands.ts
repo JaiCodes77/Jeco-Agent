@@ -46,6 +46,10 @@ function run(cmd: PageCommand | undefined): PageResult {
     return { ok: true, op: "click", detail: `Clicked control ${cmd.ref}.` };
   }
 
+  if (cmd.op === "frame") {
+    return { ok: true, op: "frame", detail: `Framed control ${cmd.ref}.`, rect: outline(target) };
+  }
+
   const kind = kindOf(target);
   if (kind === "password" || kind === "payment") {
     return { ok: false, error: "Password and payment fields are blocked." };
@@ -201,6 +205,16 @@ function commitPost(text: string, ref?: number): PageResult {
 function area(el: Element): number {
   const rect = el.getBoundingClientRect();
   return rect.width * rect.height;
+}
+
+function outline(el: Element): { x: number; y: number; width: number; height: number } {
+  el.scrollIntoView({ block: "center", inline: "nearest" });
+  if (el instanceof HTMLElement) {
+    el.style.outline = "2px solid #0f6e6b";
+    el.style.outlineOffset = "2px";
+  }
+  const box = el.getBoundingClientRect();
+  return { x: box.x, y: box.y, width: box.width, height: box.height };
 }
 
 function activate(el: Element): void {

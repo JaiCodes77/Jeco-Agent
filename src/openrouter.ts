@@ -101,8 +101,24 @@ const TOOLS = [
   },
 ];
 
-export function createOpenRouterClient(apiKey: string, model: string): ChatClient {
-  return (messages, signal) => complete(apiKey, model, messages, signal);
+const PLAN_SYSTEM = "Reply with exactly 3 short lines of the plan. Do not call tools.";
+
+export function createOpenRouterClient(
+  apiKey: string,
+  model: string,
+  options?: { backupModel?: string; baseUrl?: string },
+): ChatClient {
+  return (messages, signal) => complete(apiKey, model, messages, signal, true, options);
+}
+
+/** One completion with tools left out, so a plan cannot open or click anything. */
+export function requestPlan(
+  apiKey: string,
+  model: string,
+  messages: ChatMessage[],
+  signal: AbortSignal,
+): Promise<ModelTurn> {
+  return complete(apiKey, model, messages, signal, false);
 }
 
 async function complete(
@@ -110,12 +126,16 @@ async function complete(
   model: string,
   messages: ChatMessage[],
   signal: AbortSignal,
+  includeTools = true,
+  options?: { backupModel?: string; baseUrl?: string },
 ): Promise<ModelTurn> {
-  const models = [model, ...FALLBACKS.filter((item) => item !== model)];
+  const withTools = includeTools && !isPlanRequest(messages);
+  const models = candidateModels(model, options);
+  const endpoint = chatEndpoint(options?.baseUrl);
   let lastError = "The free models are busy. Wait a minute and run the task again.";
   for (const candidate of models) {
     if (signal.aborted) throw new DOMException("Stopped.", "AbortError");
-    const response = await requestModel(apiKey, candidate, messages, signal);
+    const response = await requestModel(apiKey, candidate, messages, signal, withTools, endpoint);
     if (response.ok) return readTurn(response);
     const failure = await failureMessage(response);
     lastError = failure;
@@ -125,38 +145,66 @@ async function complete(
   throw new Error(lastError);
 }
 
+function candidateModels(model: string, options?: { backupModel?: string; baseUrl?: string }): string[] {
+  const backup = options?.backupModel?.trim() ?? "";
+  const local = Boolean(options?.baseUrl?.trim());
+  const models = [model];
+  if (backup && backup !== model) models.push(backup);
+  if (local) return models;
+  for (const item of FALLBACKS) {
+    if (!models.includes(item)) models.push(item);
+  }
+  return models;
+}
+
+function chatEndpoint(baseUrl?: string): string {
+  const raw = baseUrl?.trim() ?? "";
+  if (!raw) return ENDPOINT;
+  const trimmed = raw.replace(/\/+$/, "");
+  if (trimmed.endsWith("/chat/completions")) return trimmed;
+  return `${trimmed}/chat/completions`;
+}
+
 async function requestModel(
   apiKey: string,
   model: string,
   messages: ChatMessage[],
   signal: AbortSignal,
+  includeTools: boolean,
+  endpoint: string,
 ): Promise<Response> {
   const body: Record<string, unknown> = {
     model,
     messages,
-    tools: TOOLS,
-    tool_choice: "auto",
-    parallel_tool_calls: false,
     temperature: 0.2,
     reasoning: { enabled: false },
   };
+  if (includeTools) {
+    body.tools = TOOLS;
+    body.tool_choice = "auto";
+    body.parallel_tool_calls = false;
+  }
 
-  let response = await post(apiKey, body, signal);
+  let response = await post(apiKey, body, signal, endpoint);
   if (response.status === 400) {
     const detail = await response.clone().text();
     if (/reasoning/i.test(detail)) {
       delete body.reasoning;
-      response = await post(apiKey, body, signal);
+      response = await post(apiKey, body, signal, endpoint);
     }
-    if (response.status === 400) {
+    if (includeTools && response.status === 400) {
       const again = await response.clone().text();
       if (/parallel_tool_calls/i.test(again)) {
         delete body.parallel_tool_calls;
-        response = await post(apiKey, body, signal);
+        response = await post(apiKey, body, signal, endpoint);
       }
     }
   }
   return response;
+}
+
+function isPlanRequest(messages: ChatMessage[]): boolean {
+  return messages.some((message) => message.role === "system" && message.content === PLAN_SYSTEM);
 }
 
 async function readTurn(response: Response): Promise<ModelTurn> {
@@ -174,8 +222,13 @@ async function readTurn(response: Response): Promise<ModelTurn> {
   };
 }
 
-async function post(apiKey: string, body: Record<string, unknown>, signal: AbortSignal): Promise<Response> {
-  return fetch(ENDPOINT, {
+async function post(
+  apiKey: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  endpoint: string,
+): Promise<Response> {
+  return fetch(endpoint, {
     method: "POST",
     signal,
     headers: {

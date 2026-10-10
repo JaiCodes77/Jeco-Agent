@@ -58,6 +58,11 @@ export function isPauseName(name: string): boolean {
   return first === "pause";
 }
 
+export function isPlayName(name: string): boolean {
+  const first = name.trim().toLowerCase().split(/\s+/)[0]?.replace(/[^a-z]/g, "") ?? "";
+  return first === "play";
+}
+
 export function parseToolCall(name: string, args: unknown): ToolCall | { error: string } {
   const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
   switch (name) {
@@ -222,6 +227,14 @@ export function decide(call: ToolCall, ctx: GateContext): GateDecision {
       allow: false,
       kind: "confirm",
       summary: `Click "${element.name}" on ${pageGrant.host}?`,
+    };
+  }
+
+  if (call.name === "click" && isPlayName(element.name)) {
+    return {
+      allow: false,
+      kind: "confirm",
+      summary: `Play "${element.name}" on ${pageGrant.host}?`,
     };
   }
 

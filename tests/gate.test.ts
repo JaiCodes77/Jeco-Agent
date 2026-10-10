@@ -131,6 +131,25 @@ test("a publish-like name confirms, and a link off the allowlist is denied", () 
   if (decision.kind === "deny") assert.match(decision.reason, /allowlist/);
 });
 
+test("Play (k) confirms on an allowlisted interactive site and Pause stays denied", () => {
+  const play = parseToolCall("click", { ref: 7 });
+  assert.ok(!("error" in play));
+  if ("error" in play) return;
+  const confirmed = decide(play, ctx({ elements: [button(7, "Play (k)")] }));
+  assert.deepEqual(confirmed, {
+    allow: false,
+    kind: "confirm",
+    summary: 'Play "Play (k)" on youtube.com?',
+  });
+
+  const pause = parseToolCall("click", { ref: 8 });
+  assert.ok(!("error" in pause));
+  if ("error" in pause) return;
+  const denied = decide(pause, ctx({ elements: [button(8, "Pause (k)")] }));
+  assert.equal(denied.kind, "deny");
+  if (denied.kind === "deny") assert.match(denied.reason, /Pause/);
+});
+
 test("a pause control is refused", () => {
   const call = parseToolCall("click", { ref: 8 });
   assert.ok(!("error" in call));

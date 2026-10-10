@@ -9,6 +9,7 @@ import type {
   ToolCall,
 } from "./types.ts";
 import { STEP_CAP } from "./types.ts";
+import { packHint } from "./packs.ts";
 
 const SYSTEM = [
   "You are Jeco. You act in the user's Brave browser by calling tools. You do not invent what a page says.",
@@ -27,6 +28,8 @@ export type StepUpdate = {
   state: "run" | "ok" | "no" | "wait";
 };
 
+const PLAN_SYSTEM = "Reply with exactly 3 short lines of the plan. Do not call tools.";
+
 export async function runTask(options: {
   task: string;
   settings: Settings;
@@ -34,14 +37,30 @@ export async function runTask(options: {
   chat: ChatClient;
   signal: AbortSignal;
   onStep: (step: StepUpdate) => void;
-  onConfirm: (summary: string) => Promise<boolean>;
+  onConfirm: (summary: string, image?: string | null) => Promise<boolean>;
+  onPlan?: (lines: string[]) => Promise<boolean>;
 }): Promise<{ status: "done" | "stopped" | "error"; text: string }> {
-  const { browser, chat, signal, settings, onStep } = options;
+  const { browser, chat, signal, settings, onStep, onPlan = async () => true } = options;
+  if (signal.aborted) return { status: "stopped", text: "Stopped." };
+
+  let lines: string[];
+  try {
+    lines = await planWith(chat, options.task, signal);
+  } catch (error) {
+    if (signal.aborted || isAbort(error)) return { status: "stopped", text: "Stopped." };
+    const text = error instanceof Error ? error.message : "The model request failed.";
+    return { status: "error", text };
+  }
+
+  if (signal.aborted) return { status: "stopped", text: "Stopped." };
+  const accepted = await confirmOrAbort(onPlan(lines), signal);
+  if (!accepted || signal.aborted) return { status: "stopped", text: "Stopped." };
+
   let current = await browser.activeTab();
   let elements: PageElement[] = [];
   let nudged = false;
   const messages: ChatMessage[] = [
-    { role: "system", content: SYSTEM },
+    { role: "system", content: [SYSTEM, packHint(options.task)].filter(Boolean).join("\n\n") },
     { role: "user", content: options.task },
   ];
 
@@ -120,14 +139,15 @@ export async function runTask(options: {
 
     if (decision.kind === "confirm") {
       onStep({ n: step, label: "Waiting for you", state: "wait" });
-      const approved = await confirmOrAbort(options.onConfirm(decision.summary), signal);
+      const image = await previewImage(parsed);
+      const approved = await confirmOrAbort(options.onConfirm(decision.summary, image), signal);
       if (!approved) {
         messages.push({
           role: "tool",
           tool_call_id: first.id,
-          content: "The user did not confirm. Do not post or send.",
+          content: "The user did not confirm. Do not continue that click.",
         });
-        onStep({ n: step, label: "Not posted", state: "no" });
+        onStep({ n: step, label: "Not confirmed", state: "no" });
         continue;
       }
     }
@@ -242,6 +262,18 @@ export async function runTask(options: {
     return `The user confirmed. ${"detail" in result ? result.detail : "The post control was activated."}`;
   }
 
+  async function previewImage(call: ToolCall): Promise<string | null> {
+    const ref = call.name === "click" ? call.args.ref : call.name === "ask_to_post" ? call.args.ref : undefined;
+    if (!current || ref == null) return null;
+    try {
+      const framed = await browser.act(current.id, { op: "frame", ref });
+      if (!framed.ok) return null;
+      return await browser.capture(current.id);
+    } catch {
+      return null;
+    }
+  }
+
   async function leftAllowlist(step: number): Promise<string | null> {
     if (!current) return "No tab is open.";
     const live = await browser.urlOf(current.id);
@@ -296,4 +328,36 @@ function shortUrl(url: string): string {
 
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+async function planWith(chat: ChatClient, task: string, signal: AbortSignal): Promise<string[]> {
+  const turn = await chat(
+    [
+      { role: "system", content: PLAN_SYSTEM },
+      { role: "user", content: task },
+    ],
+    signal,
+  );
+  return planLines(turn.content, task);
+}
+
+function planLines(content: string | null, task: string): string[] {
+  const spoken = (content ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const backup = backupPlan(task);
+  const lines = spoken.slice(0, 3);
+  for (let i = lines.length; i < 3; i += 1) lines.push(backup[i]);
+  return lines;
+}
+
+function backupPlan(task: string): [string, string, string] {
+  const brief = task.trim().replace(/\s+/g, " ").slice(0, 72);
+  const subject = brief || "the task";
+  return [
+    `Read the request: ${subject}`,
+    "Carry out that request in the browser",
+    "Finish with a short answer",
+  ];
 }

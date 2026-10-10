@@ -59,6 +59,16 @@ export function createBrowser(getSignal: () => AbortSignal): BrowserPort {
     async back(tabId) {
       await chrome.tabs.goBack(tabId);
     },
+
+    async capture(tabId) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.windowId == null) return null;
+        return await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      } catch {
+        return null;
+      }
+    },
   };
 }
 

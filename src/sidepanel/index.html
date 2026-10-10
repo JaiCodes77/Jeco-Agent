@@ -27,6 +27,14 @@
         <span>Model</span>
         <input id="model" type="text" spellcheck="false" />
       </label>
+      <label class="field">
+        <span>Backup model</span>
+        <input id="backup-model" type="text" placeholder="optional backup model" spellcheck="false" />
+      </label>
+      <label class="field">
+        <span>Base URL</span>
+        <input id="base-url" type="text" placeholder="optional local base URL" spellcheck="false" />
+      </label>
       <button type="button" id="save-key" class="button">Save key</button>
       <p id="key-note" class="note"></p>
 
@@ -45,23 +53,40 @@
     <ol id="steps" class="steps"></ol>
     <div id="log" class="log"></div>
 
+    <section id="plan" class="plan" hidden>
+      <h2>Plan</h2>
+      <ol id="plan-lines"></ol>
+      <div class="row">
+        <button type="button" id="plan-start" class="button">Start</button>
+        <button type="button" id="plan-cancel" class="button quiet">Cancel</button>
+      </div>
+    </section>
+
     <section id="confirm" class="confirm" hidden>
-      <h2>Confirm</h2>
+      <h2 id="confirm-title">Confirm</h2>
+      <img id="confirm-image" alt="The control Jeco is about to use" hidden />
       <p id="confirm-text"></p>
       <div class="row">
         <button type="button" id="confirm-yes" class="button">Post it</button>
-        <button type="button" id="confirm-no" class="button quiet">Don't post</button>
+        <button type="button" id="confirm-no" class="button quiet">Don't do it</button>
       </div>
     </section>
+
+    <ul id="saved-tasks" class="sites"></ul>
 
     <form id="composer" class="composer">
       <label class="field">
         <span>Task</span>
         <textarea id="task" rows="3" placeholder="Find a video, open a page, or draft a post"></textarea>
       </label>
+      <label class="field" id="task-name-field" hidden>
+        <span>Name</span>
+        <input id="task-name" type="text" placeholder="Task name" spellcheck="false" />
+      </label>
       <div class="row">
         <button type="submit" id="run" class="button">Run</button>
         <button type="button" id="stop" class="button quiet" hidden>Stop</button>
+        <button type="button" id="save-task" class="button" hidden>Save task</button>
       </div>
     </form>
     <p class="foot">Page text from each step is sent to OpenRouter. Logins stay in Brave.</p>

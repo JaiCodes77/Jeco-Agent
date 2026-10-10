@@ -88,7 +88,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .settings[hidden],
 .confirm[hidden],
-#stop[hidden] {
+#plan[hidden],
+#stop[hidden],
+#save-task[hidden],
+.field[hidden] {
   display: none;
 }
 
@@ -118,6 +121,8 @@ textarea { resize: vertical; }
 .note { min-height: 1em; margin: 0; }
 
 .sites { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+
+#saved-tasks { margin: 8px 16px; }
 
 .sites li {
   display: flex;
@@ -172,6 +177,32 @@ textarea { resize: vertical; }
   padding: 12px;
   background: var(--warn-soft);
   color: var(--warn);
+}
+
+.plan {
+  margin: 8px 16px;
+  padding: 12px;
+  background: var(--teal-soft);
+  color: var(--ink);
+}
+
+.plan ol { margin: 8px 0; padding-left: 18px; }
+
+.confirm img, .plan[hidden], .confirm[hidden] {
+  max-width: 100%;
+}
+
+.confirm img {
+  display: block;
+  margin: 8px 0;
+  border: 1px solid var(--line);
+}
+
+.plan[hidden],
+#plan[hidden],
+.confirm[hidden],
+#confirm-image[hidden] {
+  display: none;
 }
 
 .confirm p { white-space: pre-wrap; margin: 8px 0; }

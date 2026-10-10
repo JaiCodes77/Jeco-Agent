@@ -10,6 +10,8 @@ const settingsToggle = document.querySelector<HTMLButtonElement>("#settings-togg
 const settingsPanel = document.querySelector<HTMLElement>("#settings")!;
 const apiKeyInput = document.querySelector<HTMLInputElement>("#api-key")!;
 const modelInput = document.querySelector<HTMLInputElement>("#model")!;
+const backupModelInput = document.querySelector<HTMLInputElement>("#backup-model")!;
+const baseUrlInput = document.querySelector<HTMLInputElement>("#base-url")!;
 const saveKeyButton = document.querySelector<HTMLButtonElement>("#save-key")!;
 const keyNote = document.querySelector<HTMLElement>("#key-note")!;
 const addSiteForm = document.querySelector<HTMLFormElement>("#add-site")!;
@@ -18,18 +20,37 @@ const siteNote = document.querySelector<HTMLElement>("#site-note")!;
 const sitesList = document.querySelector<HTMLElement>("#sites")!;
 const stepsList = document.querySelector<HTMLOListElement>("#steps")!;
 const log = document.querySelector<HTMLElement>("#log")!;
+const planBox = document.querySelector<HTMLElement>("#plan")!;
+const planLines = document.querySelector<HTMLOListElement>("#plan-lines")!;
+const planStart = document.querySelector<HTMLButtonElement>("#plan-start")!;
+const planCancel = document.querySelector<HTMLButtonElement>("#plan-cancel")!;
 const confirmBox = document.querySelector<HTMLElement>("#confirm")!;
+const confirmTitle = document.querySelector<HTMLElement>("#confirm-title")!;
+const confirmImage = document.querySelector<HTMLImageElement>("#confirm-image")!;
 const confirmText = document.querySelector<HTMLElement>("#confirm-text")!;
 const confirmYes = document.querySelector<HTMLButtonElement>("#confirm-yes")!;
 const confirmNo = document.querySelector<HTMLButtonElement>("#confirm-no")!;
 const composer = document.querySelector<HTMLFormElement>("#composer")!;
 const taskInput = document.querySelector<HTMLTextAreaElement>("#task")!;
+const taskNameField = document.querySelector<HTMLElement>("#task-name-field")!;
+const taskNameInput = document.querySelector<HTMLInputElement>("#task-name")!;
+const saveTaskButton = document.querySelector<HTMLButtonElement>("#save-task")!;
+const savedTasksList = document.querySelector<HTMLElement>("#saved-tasks")!;
 const runButton = document.querySelector<HTMLButtonElement>("#run")!;
 const stopButton = document.querySelector<HTMLButtonElement>("#stop")!;
 
-let settings: Settings = { apiKey: "", model: DEFAULT_MODEL, sites: [] };
+let settings: Settings = {
+  apiKey: "",
+  model: DEFAULT_MODEL,
+  backupModel: "",
+  baseUrl: "",
+  savedTasks: [],
+  sites: [],
+};
 let abort: AbortController | null = null;
 let resolveConfirm: ((approved: boolean) => void) | null = null;
+let resolvePlan: ((approved: boolean) => void) | null = null;
+let finishedTask = "";
 
 settingsToggle.addEventListener("click", () => {
   settingsPanel.hidden = !settingsPanel.hidden;
@@ -38,6 +59,8 @@ settingsToggle.addEventListener("click", () => {
 saveKeyButton.addEventListener("click", () => {
   settings.apiKey = apiKeyInput.value.trim() || settings.apiKey;
   settings.model = modelInput.value.trim() || DEFAULT_MODEL;
+  settings.backupModel = backupModelInput.value.trim();
+  settings.baseUrl = baseUrlInput.value.trim();
   apiKeyInput.value = "";
   void saveSettings(settings).then(() => {
     keyNote.textContent = settings.apiKey ? "Key saved on this Mac." : "Add a key before running a task.";
@@ -83,20 +106,43 @@ composer.addEventListener("submit", (event) => {
   void startTask(task);
 });
 
+taskNameInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") event.preventDefault();
+});
+
+saveTaskButton.addEventListener("click", () => {
+  const name = taskNameInput.value.trim();
+  if (!name || !finishedTask) {
+    taskNameInput.focus();
+    return;
+  }
+  settings.savedTasks = [...settings.savedTasks, { name, task: finishedTask }];
+  taskNameInput.value = "";
+  void saveSettings(settings);
+  renderSavedTasks();
+});
+
 stopButton.addEventListener("click", () => {
   abort?.abort();
   resolveConfirm?.(false);
   resolveConfirm = null;
+  resolvePlan?.(false);
+  resolvePlan = null;
 });
 
 confirmYes.addEventListener("click", () => settleConfirm(true));
 confirmNo.addEventListener("click", () => settleConfirm(false));
+planStart.addEventListener("click", () => settlePlan(true));
+planCancel.addEventListener("click", () => settlePlan(false));
 
 void loadSettings().then((loaded) => {
   settings = loaded;
   modelInput.value = settings.model;
+  backupModelInput.value = settings.backupModel;
+  baseUrlInput.value = settings.baseUrl;
   keyNote.textContent = settings.apiKey ? "A key is saved on this Mac." : "Add a key before running a task.";
   renderSites();
+  renderSavedTasks();
   if (settings.sites.length === 0) {
     addMessage("jeco", "Add a site in Settings. Jeco acts only on sites you allow.");
   }
@@ -135,6 +181,40 @@ function toggle(label: string, checked: boolean, onChange: (on: boolean) => void
   return wrap;
 }
 
+function renderSavedTasks(): void {
+  savedTasksList.replaceChildren();
+  for (const saved of settings.savedTasks) {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "host";
+    name.textContent = saved.name;
+    const run = document.createElement("button");
+    run.type = "button";
+    run.className = "button";
+    run.textContent = "Run";
+    run.addEventListener("click", () => {
+      if (!saved.task || abort) return;
+      if (!settings.apiKey) {
+        settingsPanel.hidden = false;
+        keyNote.textContent = "Add an OpenRouter key first.";
+        return;
+      }
+      void startTask(saved.task);
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "text-button";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => {
+      settings.savedTasks = settings.savedTasks.filter((item) => item !== saved);
+      void saveSettings(settings);
+      renderSavedTasks();
+    });
+    item.append(name, run, remove);
+    savedTasksList.append(item);
+  }
+}
+
 function updateSite(host: string, patch: { interact?: boolean; post?: boolean }): void {
   settings.sites = settings.sites.map((site) => (site.host === host ? { ...site, ...patch } : site));
   void saveSettings(settings);
@@ -144,10 +224,14 @@ async function startTask(task: string): Promise<void> {
   abort = new AbortController();
   const signal = abort.signal;
   setBusy(true);
+  setSaveOffer(false);
   stepsList.replaceChildren();
   addMessage("you", task);
   const browser = createBrowser(() => signal);
-  const chat = createOpenRouterClient(settings.apiKey, settings.model || DEFAULT_MODEL);
+  const chat = createOpenRouterClient(settings.apiKey, settings.model || DEFAULT_MODEL, {
+    backupModel: settings.backupModel,
+    baseUrl: settings.baseUrl,
+  });
   const result = await runTask({
     task,
     settings,
@@ -155,25 +239,65 @@ async function startTask(task: string): Promise<void> {
     chat,
     signal,
     onStep: upsertStep,
-    onConfirm: (summary) => {
+    onPlan: (lines) => {
+      planLines.replaceChildren();
+      for (const line of lines) {
+        const item = document.createElement("li");
+        item.textContent = line;
+        planLines.append(item);
+      }
+      planBox.hidden = false;
+      return new Promise((resolve) => {
+        resolvePlan = resolve;
+      });
+    },
+    onConfirm: (summary, image) => {
+      const playing = summary.startsWith("Play ");
+      confirmTitle.textContent = playing ? "Play" : "Post";
+      confirmYes.textContent = playing ? "Play it" : "Post it";
       confirmText.textContent = summary;
+      if (image) {
+        confirmImage.src = image;
+        confirmImage.hidden = false;
+      } else {
+        confirmImage.removeAttribute("src");
+        confirmImage.hidden = true;
+      }
       confirmBox.hidden = false;
       return new Promise((resolve) => {
         resolveConfirm = resolve;
       });
     },
   });
+  planBox.hidden = true;
   confirmBox.hidden = true;
   resolveConfirm = null;
   addMessage("jeco", result.text);
   abort = null;
   setBusy(false);
+  if (result.status === "done") {
+    finishedTask = task;
+    setSaveOffer(true);
+  }
+}
+
+function setSaveOffer(show: boolean): void {
+  taskNameField.hidden = !show;
+  saveTaskButton.hidden = !show;
+  if (!show) taskNameInput.value = "";
 }
 
 function settleConfirm(approved: boolean): void {
   confirmBox.hidden = true;
+  confirmImage.hidden = true;
   resolveConfirm?.(approved);
   resolveConfirm = null;
+}
+
+function settlePlan(approved: boolean): void {
+  planBox.hidden = true;
+  resolvePlan?.(approved);
+  resolvePlan = null;
 }
 
 function setBusy(busy: boolean): void {
