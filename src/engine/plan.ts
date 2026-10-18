@@ -35,10 +35,13 @@ export function parsePlan(content: string | null, task: string, allowed: string[
   return planFromLines(content, task, allowed, currentHost);
 }
 
+export function sitesLine(sites: string[]): string {
+  return `Sites: ${sites.length > 0 ? sites.join(", ") : "any you allowed"}`;
+}
+
 export function taskWithPlan(task: string, plan: Plan): string {
   const steps = plan.lines.map((line, index) => `${index + 1}. ${line}`).join("\n");
-  const sites = plan.sites.length > 0 ? plan.sites.join(", ") : "any you allowed";
-  return `${task}\n\nApproved plan:\n${steps}\nSites: ${sites}`;
+  return `${task}\n\nApproved plan:\n${steps}\n${sitesLine(plan.sites)}`;
 }
 
 export function backupPlan(task: string): Plan["lines"] {
@@ -56,7 +59,7 @@ function planFromJson(value: unknown, allowed: string[]): Plan | null {
   const record = value as Record<string, unknown>;
   if (!Array.isArray(record.steps) || !record.steps.every((step) => typeof step === "string")) return null;
   if (!Array.isArray(record.sites) || !record.sites.every((site) => typeof site === "string")) return null;
-  const lines = three(
+  const lines = threeLines(
     record.steps.map((step) => clip(stripBullet(step))),
     "the task",
   );
@@ -71,7 +74,7 @@ function planFromLines(content: string | null, task: string, allowed: string[], 
     .filter((line) => line.length > 0);
   const named = [...hostsIn(`${content ?? ""}\n${task}`)];
   if (currentHost && allowed.includes(currentHost) && !named.includes(currentHost)) named.push(currentHost);
-  return finishPlan(three(spoken, task), named, "fallback", allowed);
+  return finishPlan(threeLines(spoken, task), named, "fallback", allowed);
 }
 
 function finishPlan(lines: Plan["lines"], rawSites: string[], source: Plan["source"], allowed: string[]): Plan {
@@ -80,13 +83,15 @@ function finishPlan(lines: Plan["lines"], rawSites: string[], source: Plan["sour
   for (const raw of rawSites) {
     const host = normalizeHost(raw);
     if (!host) continue;
-    const bucket = allowed.includes(host) ? sites : missing;
-    if (!bucket.includes(host)) bucket.push(host);
+    const grant = allowed.find((site) => host === site || host.endsWith(`.${site}`));
+    const bucket = grant ? sites : missing;
+    const stored = grant ?? host;
+    if (!bucket.includes(stored)) bucket.push(stored);
   }
   return { lines, sites, missing, scope: sites.length > 0 ? sites : null, source };
 }
 
-function three(lines: string[], task: string): Plan["lines"] {
+function threeLines(lines: string[], task: string): Plan["lines"] {
   const backup = backupPlan(task);
   const next = lines.slice(0, 3);
   while (next.length < 3) next.push(backup[next.length]);

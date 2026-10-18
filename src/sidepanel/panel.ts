@@ -1,4 +1,5 @@
 import { createBrowser } from "../browser/browser.ts";
+import { sitesLine } from "../engine/plan.ts";
 import { runTask } from "../engine/loop.ts";
 import { DEFAULT_MODEL } from "../limits.ts";
 import { baseUrlTarget, createClient } from "../model/client.ts";
@@ -368,8 +369,7 @@ async function startTask(task: string): Promise<void> {
           item.textContent = line;
           planLines.append(item);
         }
-        const sites = plan.sites.length > 0 ? plan.sites.join(", ") : "any you allowed";
-        const extra = [`Sites: ${sites}`];
+        const extra = [sitesLine(plan.sites)];
         if (plan.missing.length > 0) extra.push(`Not allowed yet: ${plan.missing.join(", ")}. Add it in Settings.`);
         if (plan.recipeTitle) extra.push(`Recipe: ${plan.recipeTitle}`);
         planExtra.textContent = extra.join(" ");

@@ -227,7 +227,7 @@ function dedupe(found: Found[]): Found[] {
   const seen = new Set<string>();
   return found.filter((item) => {
     if (!item.element.href) return true;
-    const key = `${normalizeLabel(item.element.name)} ${hrefKey(item.element.href)}`;
+    const key = `${normalizeLabel(item.element.name)} ${item.element.href}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -384,10 +384,8 @@ function containerOf(
   field: Element,
   button: Element | null,
 ): { el: Element; kind: "dialog" | "form" | "ancestor" } | null {
-  const dialog = field.closest("[role='dialog'], dialog");
-  if (dialog) return { el: dialog, kind: "dialog" };
-  const form = field.closest("form");
-  if (form) return { el: form, kind: "form" };
+  const boxed = field.closest("[role='dialog'], dialog, form");
+  if (boxed) return { el: boxed, kind: boxed.tagName === "FORM" ? "form" : "dialog" };
   let node = field.parentElement;
   for (let depth = 0; node && depth < ANCESTOR_LIMIT; depth += 1) {
     if (button ? node.contains(button) : publishButtons(node).length > 0) return { el: node, kind: "ancestor" };
@@ -471,6 +469,10 @@ function parsePrevious(raw: string | null): [string, string] {
 
 function pressEnter(el: Element, ref: number): PageResult {
   if (!(el instanceof HTMLElement)) return gone(ref);
+  if (el instanceof HTMLInputElement && el.form) {
+    const reason = blockedEnter(el.form);
+    if (reason) return { ok: false, error: reason };
+  }
   el.focus();
   const key = (type: string) =>
     new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true });
@@ -478,16 +480,23 @@ function pressEnter(el: Element, ref: number): PageResult {
   el.dispatchEvent(down);
   el.dispatchEvent(key("keypress"));
   el.dispatchEvent(key("keyup"));
-  if (el instanceof HTMLInputElement && el.form) {
-    const secret = Array.from(el.form.elements).some((field) => {
-      if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return false;
-      const kind = kindOf(field);
-      return kind === "password" || kind === "payment";
-    });
-    if (secret) return { ok: false, error: "Enter is blocked in forms with password or payment fields." };
-    if (!down.defaultPrevented) el.form.requestSubmit();
-  }
+  if (el instanceof HTMLInputElement && el.form && !down.defaultPrevented) el.form.requestSubmit();
   return { ok: true, op: "enter", detail: `Pressed Enter in control ${ref}.` };
+}
+
+function blockedEnter(form: HTMLFormElement): string | null {
+  const fields = Array.from(form.elements);
+  const secret = fields.some((field) => {
+    if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return false;
+    const kind = kindOf(field);
+    return kind === "password" || kind === "payment";
+  });
+  if (secret) return "Enter is blocked in forms with password or payment fields.";
+  const publishes = fields.some(
+    (field) => field instanceof HTMLElement && classifyControl(label(field), kindOf(field)) === "publish",
+  );
+  if (publishes) return "Enter would publish. Use ask_to_post.";
+  return null;
 }
 
 function activate(el: Element): void {

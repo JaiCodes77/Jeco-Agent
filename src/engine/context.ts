@@ -1,4 +1,5 @@
 import { CONTROL_CAP, MODEL_CHAR_BUDGET, TEXT_CAP } from "../limits.ts";
+import { wrapPageText } from "../safety/untrusted.ts";
 import type { ChatMessage, PageElement } from "../types.ts";
 
 export type MessageMeta = { kind: "snapshot"; url: string; title: string } | null;
@@ -40,7 +41,8 @@ export function formatSnapshot(input: {
   elements: PageElement[];
   total?: number;
 }): string {
-  const text = input.text.replace(/\s+\n/g, "\n").trim().slice(0, TEXT_CAP);
+  const raw = input.text.replace(/\s+\n/g, "\n").trim().slice(0, TEXT_CAP);
+  const text = raw ? wrapPageText(raw) : "";
   const total = input.total ?? input.elements.length;
   const shown = input.elements.slice(0, CONTROL_CAP);
   const more =

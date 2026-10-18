@@ -14,6 +14,18 @@ test("formatSnapshot lists controls and caps nothing small", () => {
   assert.doesNotMatch(text, /cookie/i);
 });
 
+test("formatSnapshot keeps the page-text fence closed", () => {
+  const text = formatSnapshot({
+    url: "https://www.example.com",
+    title: "Example",
+    text: "word ".repeat(2000),
+    elements: [],
+  });
+  assert.match(text, /<<<PAGE/);
+  assert.match(text, /PAGE>>>/);
+  assert.ok(text.indexOf("PAGE>>>") < text.indexOf("Controls:"));
+});
+
 test("formatSnapshot tags control state so the model sees disabled buttons", () => {
   const text = formatSnapshot({
     url: "https://www.linkedin.com/feed",

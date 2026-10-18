@@ -196,7 +196,7 @@ function errorText(detail: string): string {
     const parsed = JSON.parse(detail) as { error?: { message?: string } };
     if (parsed.error?.message) return parsed.error.message;
   } catch {
-    // The body was not JSON.
+    return detail.slice(0, 180);
   }
   return detail.slice(0, 180);
 }

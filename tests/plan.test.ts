@@ -69,6 +69,18 @@ test("an empty reply uses the backup plan and an open scope", () => {
   assert.match(plan.lines[0], /Read the request: Do the thing/);
 });
 
+test("a subdomain of an allowed site stays on the plan", () => {
+  const plan = parsePlan(
+    '{"steps":["Open the article","Read it","Finish"],"sites":["en.wikipedia.org"]}',
+    "read",
+    allowed,
+    null,
+  );
+  assert.deepEqual(plan.sites, ["wikipedia.org"]);
+  assert.deepEqual(plan.missing, []);
+  assert.deepEqual(plan.scope, ["wikipedia.org"]);
+});
+
 test("the approved plan names the sites", () => {
   const plan = parsePlan('{"steps":["One","Two","Three"],"sites":["youtube.com"]}', "play", allowed, null);
   assert.equal(

@@ -59,7 +59,7 @@ function pushParsed(found: unknown[], raw: string | undefined): void {
   try {
     found.push(JSON.parse(raw) as unknown);
   } catch {
-    // The next candidate may still be valid JSON.
+    return;
   }
 }
 
