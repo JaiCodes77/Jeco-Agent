@@ -33,7 +33,7 @@ const FIRST_WORDS = new Map<string, Risk>([
   ),
 ]);
 
-const TEXT_KINDS = new Set<ElementKind>(["text", "password", "payment"]);
+const TEXT_KINDS = new Set<ElementKind>(["text", "search", "password", "payment"]);
 
 export function normalizeLabel(name: string): string {
   return name

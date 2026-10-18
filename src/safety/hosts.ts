@@ -17,6 +17,11 @@ export function normalizeHost(input: string): string | null {
   }
 }
 
+export function inScope(url: string, scope: string[] | null): boolean {
+  if (!scope) return true;
+  return grantForUrl(url, scope.map((host) => ({ host, interact: true, post: false }))) != null;
+}
+
 export function grantForUrl(url: string, sites: SiteGrant[]): SiteGrant | null {
   let parsed: URL;
   try {

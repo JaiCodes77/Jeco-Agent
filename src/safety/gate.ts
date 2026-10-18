@@ -1,6 +1,6 @@
 import { MAX_TEXT } from "../limits.ts";
 import type { ConfirmSpec, Fingerprint, GateContext, GateDecision, PageElement, ToolCall } from "../types.ts";
-import { grantForUrl } from "./hosts.ts";
+import { grantForUrl, inScope } from "./hosts.ts";
 import { classifyControl, normalizeLabel } from "./risk.ts";
 
 export function fingerprint(element: PageElement): Fingerprint {
@@ -37,6 +37,19 @@ export function parseToolCall(name: string, args: unknown): ToolCall | { error: 
       const dy = typeof record.dy === "number" && Number.isFinite(record.dy) ? record.dy : 640;
       return { name, args: { dy: Math.max(-2000, Math.min(2000, Math.round(dy))) } };
     }
+    case "find": {
+      const text = stringField(record.text)?.trim() ?? "";
+      if (!text) return { error: "find needs a word to search for." };
+      if (text.length > 80) return { error: "That search is too long." };
+      return { name, args: { text } };
+    }
+    case "press_enter": {
+      const ref = refField(record.ref);
+      if (ref == null) return { error: "press_enter needs a control number." };
+      return { name, args: { ref } };
+    }
+    case "go_back":
+      return { name, args: {} };
     case "ask_to_post": {
       const text = stringField(record.text);
       if (!text) return { error: "ask_to_post needs the exact text to post." };
@@ -67,9 +80,14 @@ export function decide(call: ToolCall, ctx: GateContext): GateDecision {
   }
 
   if (call.name === "open_tab" || call.name === "navigate") {
-    if (!grantForUrl(call.args.url, ctx.sites)) {
-      return deny("That address is not on the allowlist. Add the site in Settings, or finish.");
-    }
+    const grant = grantForUrl(call.args.url, ctx.sites);
+    if (!grant) return deny("That address is not on the allowlist. Add the site in Settings, or finish.");
+    if (!inScope(call.args.url, ctx.scope)) return confirm({ kind: "scope", host: grant.host });
+    return { allow: true, kind: "browser" };
+  }
+
+  if (call.name === "go_back") {
+    if (!ctx.pageUrl) return deny("No tab is open. Use open_tab.");
     return { allow: true, kind: "browser" };
   }
 
@@ -79,16 +97,12 @@ export function decide(call: ToolCall, ctx: GateContext): GateDecision {
   }
   const host = pageGrant.host;
 
-  if (call.name === "read_page" || call.name === "scroll") {
+  if (call.name === "read_page" || call.name === "scroll" || call.name === "find") {
     return { allow: true, kind: "browser" };
   }
 
   if (!pageGrant.interact) {
     return deny(`${host} is read-only. Turn on interaction in Settings, or finish.`);
-  }
-
-  if (call.name === "find" || call.name === "press_enter" || call.name === "go_back") {
-    return deny("That action is not available yet.");
   }
 
   if (call.name === "ask_to_post") {
@@ -122,37 +136,59 @@ export function decide(call: ToolCall, ctx: GateContext): GateDecision {
     return deny("That control is disabled.");
   }
 
-  if (call.name === "type") {
-    if (element.kind === "password" || element.kind === "payment") {
-      return deny("Password and payment fields are blocked.");
+  if (call.name === "type" && (element.kind === "password" || element.kind === "payment")) {
+    return deny("Password, code, and payment fields are blocked.");
+  }
+
+  if (call.name === "press_enter") {
+    const single = element.kind === "search" || (element.kind === "text" && element.multiline !== true);
+    if (!single) return deny("Enter only works in search boxes and single-line fields. To publish, use ask_to_post.");
+  }
+
+  if (call.name === "click" && element.href) {
+    const link = grantForUrl(element.href, ctx.sites);
+    if (!link) return deny("That control leaves the allowlist.");
+    if (!inScope(element.href, ctx.scope)) return confirm({ kind: "scope", host: link.host });
+  }
+
+  if (call.name === "click") {
+    switch (classifyControl(element.name, element.kind)) {
+      case "blocked":
+        return deny(
+          normalizeLabel(element.name).split(" ")[0] === "pause"
+            ? "Do not click Pause. If a control is named Play, click that once. Otherwise call finish."
+            : "Jeco never buys, pays, or changes account security. Do that yourself, or finish.",
+        );
+      case "publish":
+        if (!pageGrant.post) {
+          return deny(`Posting is off for ${host}. Use ask_to_post after posting is enabled, or finish.`);
+        }
+        if (ctx.posted) return deny("This run already posted once. Call finish.");
+        return confirm({ kind: "publish", host, control: element.name });
+      case "play":
+        return confirm({ kind: "play", host, control: element.name });
+      case "risky":
+        return confirm({
+          kind: "risky",
+          host,
+          control: element.name,
+          reason: `This changes something on ${host}.`,
+        });
+      default:
+        break;
     }
-    return { allow: true, kind: "browser" };
   }
 
-  if (element.href && !grantForUrl(element.href, ctx.sites)) {
-    return deny("That control leaves the allowlist.");
+  if (ctx.wary && (call.name === "click" || call.name === "type" || call.name === "press_enter")) {
+    return confirm({
+      kind: "risky",
+      host,
+      control: element.name,
+      reason: "This page had text that looked like instructions to an AI.",
+    });
   }
 
-  switch (classifyControl(element.name, element.kind)) {
-    case "blocked":
-      return deny(
-        normalizeLabel(element.name).split(" ")[0] === "pause"
-          ? "Do not click Pause. If a control is named Play, click that once. Otherwise call finish."
-          : "Jeco never buys, pays, or changes account security. The user can do that themselves. Call finish.",
-      );
-    case "publish":
-      if (!pageGrant.post) {
-        return deny(`Posting is off for ${host}. Use ask_to_post after posting is enabled, or finish.`);
-      }
-      if (ctx.posted) return deny("This run already posted once. Call finish.");
-      return confirm({ kind: "publish", host, control: element.name });
-    case "play":
-      return confirm({ kind: "play", host, control: element.name });
-    case "risky":
-      return confirm({ kind: "risky", host, control: element.name, reason: `This changes something on ${host}.` });
-    default:
-      return { allow: true, kind: "browser" };
-  }
+  return { allow: true, kind: "browser" };
 }
 
 function deny(reason: string): GateDecision {
