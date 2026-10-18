@@ -7,7 +7,7 @@ await build({
   entryPoints: {
     background: "src/background.ts",
     panel: "src/sidepanel/panel.ts",
-    "page-hands": "src/page-hands.ts",
+    "page-hands": "src/page/hands.ts",
   },
   bundle: true,
   outdir: "dist",

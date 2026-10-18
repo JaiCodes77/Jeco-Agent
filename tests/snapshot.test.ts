@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatSnapshot } from "../src/snapshot.ts";
+import { formatSnapshot } from "../src/engine/context.ts";
 
 test("formatSnapshot lists controls and caps nothing small", () => {
   const text = formatSnapshot({

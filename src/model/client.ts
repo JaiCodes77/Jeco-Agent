@@ -1,4 +1,5 @@
-import type { ChatClient, ChatMessage, ChatRequest, ModelTurn } from "./types.ts";
+import type { ChatClient, ChatMessage, ChatRequest, ModelTurn, Settings } from "../types.ts";
+import { TOOLS } from "./tools.ts";
 
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const FALLBACKS = [
@@ -7,111 +8,10 @@ const FALLBACKS = [
   "nvidia/nemotron-3.5-lightning:free",
 ];
 
-const TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "open_tab",
-      description: "Open an https URL in a new tab. The host must already be allowlisted.",
-      parameters: {
-        type: "object",
-        properties: { url: { type: "string" } },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "navigate",
-      description: "Go to an https URL in the current tab. The host must already be allowlisted.",
-      parameters: {
-        type: "object",
-        properties: { url: { type: "string" } },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "read_page",
-      description: "Read the current page: title, visible text, and numbered controls.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "click",
-      description: "Click one numbered control from the latest read_page result.",
-      parameters: {
-        type: "object",
-        properties: { ref: { type: "integer" } },
-        required: ["ref"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "type",
-      description: "Type text into one numbered text control. Password and payment fields are blocked.",
-      parameters: {
-        type: "object",
-        properties: { ref: { type: "integer" }, text: { type: "string" } },
-        required: ["ref", "text"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "scroll",
-      description: "Scroll the current page vertically by dy pixels.",
-      parameters: {
-        type: "object",
-        properties: { dy: { type: "integer" } },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "ask_to_post",
-      description:
-        "Ask the user to approve a post. Jeco types the exact text into the numbered text field, shows it, and presses the post button next to that field only after the user approves.",
-      parameters: {
-        type: "object",
-        properties: {
-          text: { type: "string" },
-          field: { type: "integer", description: "The text field from read_page." },
-          button: { type: "integer", description: "Optional post button from read_page." },
-        },
-        required: ["text", "field"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "finish",
-      description: "End the task and tell the user the result.",
-      parameters: {
-        type: "object",
-        properties: { answer: { type: "string" } },
-        required: ["answer"],
-      },
-    },
-  },
-];
-
-type ClientOptions = { backupModel?: string; baseUrl?: string };
-
 export type BaseUrlTarget = { pattern: string; label: string; local: boolean };
 
-export function createOpenRouterClient(apiKey: string, model: string, options?: ClientOptions): ChatClient {
-  return (request) => complete(apiKey, model, request, options);
+export function createClient(settings: Settings): ChatClient {
+  return (request) => complete(settings, request);
 }
 
 export function baseUrlTarget(raw: string): BaseUrlTarget | { error: string } {
@@ -131,36 +31,41 @@ export function baseUrlTarget(raw: string): BaseUrlTarget | { error: string } {
   return { pattern: `${url.protocol}//${url.hostname}/*`, label: url.host, local };
 }
 
-async function complete(
-  apiKey: string,
-  model: string,
-  request: ChatRequest,
-  options?: ClientOptions,
-): Promise<ModelTurn> {
+async function complete(settings: Settings, request: ChatRequest): Promise<ModelTurn> {
+  const config = settings.providers[settings.provider];
+  const openRouter = settings.provider === "openrouter";
+  const local = settings.provider === "local";
+  const baseUrl = local ? config.baseUrl.trim() : "";
   const { messages, signal, tools } = request;
-  const baseUrl = options?.baseUrl?.trim() ?? "";
-  const models = candidateModels(model, options);
+  const models = candidateModels(config.model, config.backupModel, openRouter);
   const endpoint = chatEndpoint(baseUrl);
-  const server = baseUrl ? "The model server" : "OpenRouter";
+  const server = local ? "The model server" : "OpenRouter";
+  const started = Date.now();
+  const skipped: string[] = [];
   let lastError = "The free models are busy. Wait a minute and run the task again.";
-  for (const candidate of models) {
+  for (let index = 0; index < models.length; index += 1) {
+    const candidate = models[index];
     if (signal.aborted) throw new DOMException("Stopped.", "AbortError");
-    const response = await requestModel(apiKey, candidate, messages, signal, tools, endpoint, !baseUrl);
-    if (response.ok) return readTurn(response);
-    const failure = await failureMessage(response, server, Boolean(baseUrl));
+    request.onAttempt?.(candidate, index);
+    const response = await requestModel(config.apiKey, candidate, messages, signal, tools, endpoint, openRouter);
+    if (response.ok) {
+      const turn = await readTurn(response);
+      return { ...turn, model: candidate, provider: settings.provider, ms: Date.now() - started, skipped };
+    }
+    const failure = await failureMessage(response, server, local);
     lastError = failure;
     const busy = response.status === 429 || response.status === 404;
     if (!busy || /daily|per day/i.test(failure)) throw new Error(failure);
+    skipped.push(candidate);
   }
   throw new Error(lastError);
 }
 
-function candidateModels(model: string, options?: ClientOptions): string[] {
-  const backup = options?.backupModel?.trim() ?? "";
-  const local = Boolean(options?.baseUrl?.trim());
+function candidateModels(model: string, backupModel: string, openRouter: boolean): string[] {
+  const backup = backupModel.trim();
   const models = [model];
   if (backup && backup !== model) models.push(backup);
-  if (local) return models;
+  if (!openRouter) return models;
   for (const item of FALLBACKS) {
     if (!models.includes(item)) models.push(item);
   }
@@ -214,7 +119,7 @@ async function requestModel(
   return response;
 }
 
-async function readTurn(response: Response): Promise<ModelTurn> {
+async function readTurn(response: Response): Promise<Pick<ModelTurn, "content" | "toolCalls">> {
   const payload = (await response.json()) as {
     choices?: { message?: { content?: unknown; tool_calls?: RawToolCall[] } }[];
   };

@@ -1,4 +1,4 @@
-import type { ElementKind, Risk } from "./types.ts";
+import type { ElementKind, Risk } from "../types.ts";
 
 const PHRASES: [string, Risk][] = [
   ["delete account", "blocked"],

@@ -1,12 +1,22 @@
+import { emptySettings } from "../src/storage/migrate.ts";
 import type {
   BrowserPort,
   ChatClient,
   ChatRequest,
+  ConfirmRequest,
   FrameRect,
   ModelTurn,
   PageCommand,
   PageElement,
   PageResult,
+  Plan,
+  ProviderConfig,
+  ProviderId,
+  RunEvent,
+  RunHooks,
+  Settings,
+  SiteGrant,
+  StepUpdate,
 } from "../src/types.ts";
 
 export const IMAGE = "data:image/png;base64,AAAA";
@@ -132,6 +142,13 @@ export function fakeBrowser(url: string | null, patch: Partial<FakePage> = {}): 
   }
 }
 
+const ANSWERED: Pick<ModelTurn, "model" | "provider" | "ms" | "skipped"> = {
+  model: "test",
+  provider: "openrouter",
+  ms: 1,
+  skipped: [],
+};
+
 export function scripted(
   turns: ModelTurn[],
   seen: ChatRequest[] = [],
@@ -142,7 +159,7 @@ export function scripted(
     seen.push({ ...request, messages: [...request.messages] });
     if (!request.tools) {
       if (plan instanceof Error) throw plan;
-      return { content: plan, toolCalls: [] };
+      return { content: plan, toolCalls: [], ...ANSWERED };
     }
     const next = queue.shift();
     if (!next) throw new Error("The test model ran out of turns.");
@@ -151,7 +168,53 @@ export function scripted(
 }
 
 export function turn(name: string, args: unknown = {}, id = name): ModelTurn {
-  return { content: null, toolCalls: [{ id, name, args }] };
+  return { content: null, toolCalls: [{ id, name, args }], ...ANSWERED };
+}
+
+export function testSettings(patch: {
+  provider?: ProviderId;
+  openrouter?: Partial<ProviderConfig>;
+  local?: Partial<ProviderConfig>;
+  sites?: SiteGrant[];
+} = {}): Settings {
+  const settings = emptySettings();
+  if (patch.provider) settings.provider = patch.provider;
+  if (patch.openrouter) settings.providers.openrouter = { ...settings.providers.openrouter, ...patch.openrouter };
+  if (patch.local) settings.providers.local = { ...settings.providers.local, ...patch.local };
+  if (patch.sites) settings.sites = patch.sites;
+  return settings;
+}
+
+export function fakeHooks(answer: {
+  plan?: boolean | ((plan: Plan) => boolean | Promise<boolean>);
+  confirm?: boolean | ((request: ConfirmRequest) => boolean | Promise<boolean>);
+} = {}): RunHooks & { steps: StepUpdate[]; plans: Plan[]; confirms: ConfirmRequest[]; events: RunEvent[] } {
+  const steps: StepUpdate[] = [];
+  const plans: Plan[] = [];
+  const confirms: ConfirmRequest[] = [];
+  const events: RunEvent[] = [];
+  const planAnswer = answer.plan ?? true;
+  const confirmAnswer = answer.confirm ?? false;
+  return {
+    steps,
+    plans,
+    confirms,
+    events,
+    onStep(step) {
+      steps.push(step);
+    },
+    onPlan(plan) {
+      plans.push(plan);
+      return Promise.resolve(typeof planAnswer === "function" ? planAnswer(plan) : planAnswer);
+    },
+    onConfirm(request) {
+      confirms.push(request);
+      return Promise.resolve(typeof confirmAnswer === "function" ? confirmAnswer(request) : confirmAnswer);
+    },
+    onEvent(event) {
+      events.push(event);
+    },
+  };
 }
 
 export function toolReplies(seen: ChatRequest[]): string[] {

@@ -1,5 +1,5 @@
-import type { BrowserPort, FrameRect, PageCommand, PageResult } from "./types.ts";
-import { NAV_TIMEOUT_MS, SETTLE_MAX_MS, SETTLE_QUIET_MS } from "./types.ts";
+import { NAV_TIMEOUT_MS, SETTLE_MAX_MS, SETTLE_QUIET_MS } from "../limits.ts";
+import type { BrowserPort, FrameRect, PageCommand, PageResult } from "../types.ts";
 
 const LOAD_START_MS = 300;
 const CROP_PAD = 24;

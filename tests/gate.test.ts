@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decide, fingerprint, grantForUrl, normalizeHost, parseToolCall } from "../src/gate.ts";
+import { decide, fingerprint, parseToolCall } from "../src/safety/gate.ts";
+import { grantForUrl, normalizeHost } from "../src/safety/hosts.ts";
 import type { GateContext, GateDecision, PageElement, SiteGrant, ToolCall } from "../src/types.ts";
 
 const youtube: SiteGrant = { host: "youtube.com", interact: true, post: false };
@@ -14,7 +15,9 @@ function ctx(partial: Partial<GateContext> = {}): GateContext {
     elements: [button(4, "Search"), button(9, "Post"), field(3, "text", "Say something")],
     stepsUsed: 1,
     stepCap: 12,
+    scope: null,
     posted: false,
+    wary: false,
     ...partial,
   };
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { postFlow, type PostFlowInput } from "../src/post-flow.ts";
+import { postFlow, type PostFlowInput } from "../src/engine/post-flow.ts";
 import type { ConfirmRequest } from "../src/types.ts";
 import { control, fakeBrowser, IMAGE, type FakeBrowser } from "./fakes.ts";
 

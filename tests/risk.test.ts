@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyControl, normalizeLabel } from "../src/risk.ts";
+import { classifyControl, normalizeLabel } from "../src/safety/risk.ts";
 
 test("normalizeLabel drops key hints, counts, and punctuation", () => {
   assert.equal(normalizeLabel("Play (k)"), "play");

@@ -1,5 +1,5 @@
-import type { PageElement } from "./types.ts";
-import { TEXT_CAP } from "./types.ts";
+import { TEXT_CAP } from "../limits.ts";
+import type { PageElement } from "../types.ts";
 
 export function formatSnapshot(input: {
   url: string;

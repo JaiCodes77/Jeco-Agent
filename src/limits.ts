@@ -1,0 +1,25 @@
+export const DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free";
+export const RETIRED_MODELS = ["qwen/qwen3.8-27b:free"];
+
+export const STEP_CAP = 12;
+export const STEP_EXTENSION = 6;
+export const TEXT_CAP = 6000;
+export const CONTROL_CAP = 80;
+export const CONTROL_SCAN_CAP = 400;
+export const FIND_CAP = 15;
+export const MAX_TEXT = 4000;
+export const NAV_TIMEOUT_MS = 15000;
+export const SETTLE_QUIET_MS = 400;
+export const SETTLE_MAX_MS = 2500;
+export const MODEL_TIMEOUT_MS = 60000;
+export const CHECK_TIMEOUT_MS = 20000;
+export const MODEL_CHAR_BUDGET = 24000;
+export const REPEAT_LIMIT = 3;
+export const MEDIA_VERIFY_MS = 2000;
+export const HISTORY_CAP = 20;
+export const HISTORY_STEP_CAP = 40;
+export const HEARTBEAT_MS = 5000;
+export const STALE_RUN_MS = 15000;
+export const SAVED_TASK_CAP = 30;
+export const X_CHAR_WARN = 280;
+export const LINKEDIN_CHAR_CAP = 3000;

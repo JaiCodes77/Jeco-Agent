@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { baseUrlTarget, chatEndpoint, createOpenRouterClient } from "../src/openrouter.ts";
+import { baseUrlTarget, chatEndpoint, createClient } from "../src/model/client.ts";
+import { testSettings } from "./fakes.ts";
 
 type Sent = { url: string; headers: Record<string, string>; body: Record<string, unknown> };
 
@@ -30,17 +31,17 @@ const signal = new AbortController().signal;
 const messages = [{ role: "user" as const, content: "Hi" }];
 
 test("a plan request sends no tools", async () => {
-  const chat = createOpenRouterClient("key", "model-a");
-  const [sent] = await capture(() => chat({ messages, tools: false, signal }));
+  const chat = createClient(testSettings({ openrouter: { apiKey: "key", model: "model-a" } }));
+  const [sent] = await capture(() => chat({ messages, tools: false, purpose: "plan", signal }));
   assert.equal("tools" in sent.body, false);
   assert.equal("tool_choice" in sent.body, false);
-  const [step] = await capture(() => chat({ messages, tools: true, signal }));
+  const [step] = await capture(() => chat({ messages, tools: true, purpose: "step", signal }));
   assert.ok(Array.isArray(step.body.tools));
 });
 
 test("OpenRouter gets the key, reasoning off, and the app title", async () => {
-  const chat = createOpenRouterClient("key", "model-a");
-  const [sent] = await capture(() => chat({ messages, tools: true, signal }));
+  const chat = createClient(testSettings({ openrouter: { apiKey: "key", model: "model-a" } }));
+  const [sent] = await capture(() => chat({ messages, tools: true, purpose: "step", signal }));
   assert.equal(sent.url, "https://openrouter.ai/api/v1/chat/completions");
   assert.equal(sent.headers.Authorization, "Bearer key");
   assert.equal(sent.headers["X-Title"], "Jeco Agent");
@@ -48,8 +49,13 @@ test("OpenRouter gets the key, reasoning off, and the app title", async () => {
 });
 
 test("a local server gets no key header and no OpenRouter extras", async () => {
-  const chat = createOpenRouterClient("", "llama3.2", { baseUrl: "http://localhost:11434/v1/" });
-  const [sent] = await capture(() => chat({ messages, tools: true, signal }));
+  const chat = createClient(
+    testSettings({
+      provider: "local",
+      local: { model: "llama3.2", baseUrl: "http://localhost:11434/v1/" },
+    }),
+  );
+  const [sent] = await capture(() => chat({ messages, tools: true, purpose: "step", signal }));
   assert.equal(sent.url, "http://localhost:11434/v1/chat/completions");
   assert.equal("Authorization" in sent.headers, false);
   assert.equal("X-Title" in sent.headers, false);
@@ -57,8 +63,10 @@ test("a local server gets no key header and no OpenRouter extras", async () => {
 });
 
 test("a local server does not fall back to OpenRouter free models", async () => {
-  const chat = createOpenRouterClient("", "llama3.2", { baseUrl: "http://localhost:11434/v1" });
-  const sent = await capture(() => chat({ messages, tools: true, signal }), 404);
+  const chat = createClient(
+    testSettings({ provider: "local", local: { model: "llama3.2", baseUrl: "http://localhost:11434/v1" } }),
+  );
+  const sent = await capture(() => chat({ messages, tools: true, purpose: "step", signal }), 404);
   assert.deepEqual(
     sent.map((item) => item.body.model),
     ["llama3.2"],

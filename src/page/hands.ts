@@ -1,6 +1,6 @@
-import { classifyControl, normalizeLabel } from "./risk.ts";
-import type { ElementState, Fingerprint, FrameRect, PageCommand, PageElement, PageResult } from "./types.ts";
-import { CONTROL_CAP, TEXT_CAP } from "./types.ts";
+import { CONTROL_CAP, TEXT_CAP } from "../limits.ts";
+import { classifyControl, normalizeLabel } from "../safety/risk.ts";
+import type { ElementState, Fingerprint, FrameRect, PageCommand, PageElement, PageResult } from "../types.ts";
 
 type Found = {
   el: Element;

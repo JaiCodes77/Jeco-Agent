@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { packHint } from "../src/packs.ts";
+import { packHint } from "../src/recipes/hints.ts";
 
 test("youtube pack searches the words left after filler", () => {
   const hint = packHint("open youtube and play a david laid video");

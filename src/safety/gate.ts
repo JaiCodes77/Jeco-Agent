@@ -1,48 +1,7 @@
+import { MAX_TEXT } from "../limits.ts";
+import type { ConfirmSpec, Fingerprint, GateContext, GateDecision, PageElement, ToolCall } from "../types.ts";
+import { grantForUrl } from "./hosts.ts";
 import { classifyControl, normalizeLabel } from "./risk.ts";
-import type {
-  ConfirmSpec,
-  Fingerprint,
-  GateContext,
-  GateDecision,
-  PageElement,
-  SiteGrant,
-  ToolCall,
-} from "./types.ts";
-
-const MAX_TEXT = 4000;
-
-export function normalizeHost(input: string): string | null {
-  const raw = input.trim().toLowerCase();
-  if (!raw) return null;
-  try {
-    const withProto = raw.includes("://") ? raw : `https://${raw}`;
-    const url = new URL(withProto);
-    if (url.username || url.password) return null;
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-    let host = url.hostname;
-    if (!host || host === "localhost" || !host.includes(".")) return null;
-    if (host.startsWith("www.")) host = host.slice(4);
-    return host;
-  } catch {
-    return null;
-  }
-}
-
-export function grantForUrl(url: string, sites: SiteGrant[]): SiteGrant | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  if (parsed.username || parsed.password) return null;
-  if (parsed.protocol !== "https:") return null;
-  const host = parsed.hostname.toLowerCase();
-  return (
-    sites.find((site) => host === site.host || host.endsWith(`.${site.host}`)) ??
-    null
-  );
-}
 
 export function fingerprint(element: PageElement): Fingerprint {
   return element.href
@@ -126,6 +85,10 @@ export function decide(call: ToolCall, ctx: GateContext): GateDecision {
 
   if (!pageGrant.interact) {
     return deny(`${host} is read-only. Turn on interaction in Settings, or finish.`);
+  }
+
+  if (call.name === "find" || call.name === "press_enter" || call.name === "go_back") {
+    return deny("That action is not available yet.");
   }
 
   if (call.name === "ask_to_post") {

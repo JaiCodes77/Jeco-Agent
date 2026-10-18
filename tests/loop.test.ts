@@ -1,18 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runTask } from "../src/loop.ts";
-import type { ChatClient, ChatRequest, ConfirmRequest, Settings } from "../src/types.ts";
-import { STEP_CAP } from "../src/types.ts";
-import { control, fakeBrowser, IMAGE, scripted, toolReplies, turn, type FakeBrowser } from "./fakes.ts";
+import { runTask } from "../src/engine/loop.ts";
+import { STEP_CAP } from "../src/limits.ts";
+import type { ChatClient, ChatRequest, ConfirmRequest, Plan, Settings } from "../src/types.ts";
+import { control, fakeBrowser, fakeHooks, IMAGE, scripted, testSettings, toolReplies, turn, type FakeBrowser } from "./fakes.ts";
 
-const settings: Settings = {
-  apiKey: "test",
-  model: "google/gemma-4-26b-a4b-it:free",
-  backupModel: "",
-  baseUrl: "",
-  savedTasks: [],
+const settings = testSettings({
+  openrouter: { apiKey: "test", model: "google/gemma-4-26b-a4b-it:free" },
   sites: [{ host: "youtube.com", interact: true, post: false }],
-};
+});
 
 const posting: Settings = { ...settings, sites: [{ host: "linkedin.com", interact: true, post: true }] };
 
@@ -21,8 +17,8 @@ function run(
   chat: ChatClient,
   extra: {
     settings?: Settings;
-    onConfirm?: (request: ConfirmRequest) => Promise<boolean>;
-    onPlan?: (lines: string[]) => Promise<boolean>;
+    confirm?: boolean | ((request: ConfirmRequest) => boolean | Promise<boolean>);
+    plan?: boolean | ((plan: Plan) => boolean | Promise<boolean>);
   } = {},
 ) {
   return runTask({
@@ -31,9 +27,7 @@ function run(
     browser,
     chat,
     signal: new AbortController().signal,
-    onStep: () => {},
-    onConfirm: extra.onConfirm ?? (async () => false),
-    onPlan: extra.onPlan,
+    hooks: fakeHooks({ plan: extra.plan, confirm: extra.confirm }),
   });
 }
 
@@ -60,14 +54,17 @@ test("the plan is asked for without tools and a declined plan touches nothing", 
   const browser = fakeBrowser(null);
   const seen: ChatRequest[] = [];
   const result = await run(browser, scripted([turn("open_tab", { url: "https://www.youtube.com" })], seen), {
-    onPlan: async (lines) => {
-      assert.deepEqual(lines, ["Check the page", "Do the task", "Finish with the answer"]);
+    plan: async (plan) => {
+      assert.deepEqual([...plan.lines], ["Check the page", "Do the task", "Finish with the answer"]);
+      assert.equal(plan.source, "model");
+      assert.equal(plan.scope, null);
       return false;
     },
   });
   assert.deepEqual(result, { status: "stopped", text: "Stopped." });
   assert.equal(seen.length, 1);
   assert.equal(seen[0].tools, false);
+  assert.equal(seen[0].purpose, "plan");
   assert.match(seen[0].messages[0].content ?? "", /exactly 3 short lines of the plan/);
   assert.equal(browser.opened.length, 0);
   assert.equal(browser.commands.length, 0);
@@ -76,7 +73,7 @@ test("the plan is asked for without tools and a declined plan touches nothing", 
 test("the approved plan is sent with the task", async () => {
   const browser = fakeBrowser("https://www.youtube.com");
   const seen: ChatRequest[] = [];
-  await run(browser, scripted([turn("finish", { answer: "Done." })], seen), { onPlan: async () => true });
+  await run(browser, scripted([turn("finish", { answer: "Done." })], seen), { plan: async () => true });
   const step = seen.find((request) => request.tools);
   assert.ok(step);
   assert.equal(
@@ -89,8 +86,9 @@ test("a failed plan request falls back to the built-in plan", async () => {
   const browser = fakeBrowser("https://www.youtube.com");
   let shown: string[] = [];
   const result = await run(browser, scripted([turn("finish", { answer: "Done." })], [], new Error("busy")), {
-    onPlan: async (lines) => {
-      shown = lines;
+    plan: async (plan) => {
+      shown = [...plan.lines];
+      assert.equal(plan.source, "fallback");
       return true;
     },
   });
@@ -133,7 +131,7 @@ test("Play is previewed, confirmed, and then clicked", async () => {
   const browser = fakeBrowser("https://www.youtube.com/watch?v=1", { elements: [control(5, "Play (k)")] });
   const requests: ConfirmRequest[] = [];
   await run(browser, scripted([turn("read_page"), turn("click", { ref: 5 }), turn("finish", { answer: "Playing." })]), {
-    onConfirm: async (request) => {
+    confirm: async (request) => {
       requests.push(request);
       return true;
     },
@@ -148,7 +146,7 @@ test("a declined risky click is not clicked and the outline is cleared", async (
   const requests: ConfirmRequest[] = [];
   const seen: ChatRequest[] = [];
   await run(browser, scripted([turn("read_page"), turn("click", { ref: 6 }), turn("finish", { answer: "Left it." })], seen), {
-    onConfirm: async (request) => {
+    confirm: async (request) => {
       requests.push(request);
       return false;
     },
@@ -164,7 +162,7 @@ test("a declined post is not clicked", async () => {
   const result = await run(
     browser,
     scripted([turn("read_page"), turn("ask_to_post", { text: "Hello", field: 3 }), turn("finish", { answer: "Left it unposted." })]),
-    { settings: posting, onConfirm: async () => false },
+    { settings: posting, confirm: async () => false },
   );
   assert.equal(browser.commands.some((cmd) => cmd.op === "click"), false);
   assert.equal(browser.page.text, "Hello");
@@ -189,7 +187,7 @@ test("only one post goes out per run", async () => {
     ),
     {
       settings: posting,
-      onConfirm: async () => {
+      confirm: async () => {
         confirms += 1;
         return true;
       },

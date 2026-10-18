@@ -41,13 +41,27 @@ Jai asked for the V2 fixes first, before the Phase 1 groundwork. They are on bra
 | M7 | `waitForNavigation` registers before `tabs.update` and counts "saw loading, then complete" as done even when the URL did not change. |
 | Low | Dead code removed, "Save" label, footer names where page text goes, version 0.3.0, `minimum_chrome_version` 120, tests typechecked (`@types/node` dev dependency), `aria-live` on steps and log, type step label names the field. |
 
+### Landed: Phase 1 groundwork (section 5)
+
+`npm run typecheck` is clean, `npm test` passes 68/68, and `npm run build` is green. Reloading the extension migrates the saved key, model, sites, and tasks. The panel looks the same.
+
+- Files moved as in section 4.3 for the code that exists: `safety/hosts.ts`, `safety/gate.ts`, `safety/risk.ts`, `engine/loop.ts`, `engine/post-flow.ts`, `engine/context.ts` (`formatSnapshot` only), `engine/prompt.ts`, `model/client.ts`, `model/tools.ts`, `browser/browser.ts`, `page/hands.ts`, `recipes/hints.ts` (`packHint`, unchanged), `storage/settings.ts`, `storage/migrate.ts`, `src/limits.ts`.
+- `runTask` takes `hooks`. `createClient(settings)` replaces `createOpenRouterClient`. Plan requests send `purpose: "plan"` and step requests send `purpose: "step"`.
+- Settings are schema 3. `migrateSettings` is pure. `loadSettings` writes back when it changes something. `onSettingsChanged` resyncs other panels.
+
 ### Deviations the next phase must absorb
 
-- The fixes landed before the Phase 1 moves. `src/risk.ts` and `src/post-flow.ts` are flat files; move them to `safety/risk.ts` and `engine/post-flow.ts` in Phase 1. The page script is still the 3-call mechanism, not D10's single call.
-- `pairPost` does not take recipe hints yet; recipes add them in Phase 7.
-- The preview crop uses a minimum of 360 × 200 CSS px centered on the control (plus 24 px padding), so small buttons still show context.
-- Not done yet, by design: the plan JSON contract and plan-bound scope (6.4), untrusted-text wrapping (6.5), `find`, `press_enter`, `go_back`, recipes, history, provider presets, icons, and the keyboard shortcut. M3, M4, M5, M8 to M12 are still open.
-- `tests/fakes.ts` holds the shared fake browser and scripted chat client; extend it rather than writing new fakes.
+- The panel is still one file. The view split (`views/run.ts`, `cards.ts`, `settings.ts`, `saved.ts`, `history.ts`) waits until history and the provider screen exist, so it is not split twice.
+- `RecipeId` and `RunEvent` live in `src/types.ts`. Putting them in `recipes/types.ts` and `engine/journal.ts` would make those files and `types.ts` import each other.
+- `find`, `press_enter`, and `go_back` are in the `ToolCall` type, and the gate refuses them with "That action is not available yet." They are not in the tool list the model sees. Phase 4 implements them; `find` and `go_back` must be allowed before the Interact check (invariant I2).
+- `FrameRect` still has `viewportWidth`, and `ConfirmRequest` still has `outlined`. The preview crop uses them.
+- The page script is still the 3-call mechanism, not D10's single call. `PageCommand` does not yet include the Phase 4 ops (`enter`, `locate`, `items`, `links`, `waitFor`, `media`).
+- `pairPost` does not take recipe hints yet; recipes add them in Phase 7. `packHint` text is unchanged until then.
+- Prompt strings moved as they are. The JSON plan prompt is Phase 5. A model plan still has `scope: null` and no site list.
+- `createClient` runs OpenRouter or a local base URL. OpenAI and xAI wait for the provider registry in Phase 8.
+- The preview crop uses a minimum of 360 × 200 CSS px centered on the control (plus 24 px padding).
+- Not done yet, by design: plan-bound scope (6.4), untrusted-text wrapping (6.5), `find`, `press_enter`, `go_back`, recipes, history, provider presets, icons, and the keyboard shortcut. M3, M4, M5, M8 to M12 are still open.
+- `tests/fakes.ts` holds the shared fake browser, scripted chat client, `testSettings`, and `fakeHooks`. Extend those rather than writing new fakes.
 
 ---
 

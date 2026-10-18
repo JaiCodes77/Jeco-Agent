@@ -1,15 +1,18 @@
-import { createBrowser } from "../browser.ts";
-import { normalizeHost } from "../gate.ts";
-import { runTask, type StepUpdate } from "../loop.ts";
-import { baseUrlTarget, createOpenRouterClient } from "../openrouter.ts";
-import { loadSettings, saveSettings } from "../storage.ts";
-import type { ConfirmRequest, Settings } from "../types.ts";
-import { DEFAULT_MODEL } from "../types.ts";
+import { createBrowser } from "../browser/browser.ts";
+import { runTask } from "../engine/loop.ts";
+import { DEFAULT_MODEL } from "../limits.ts";
+import { baseUrlTarget, createClient } from "../model/client.ts";
+import { normalizeHost } from "../safety/hosts.ts";
+import { emptySettings } from "../storage/migrate.ts";
+import { loadSettings, onSettingsChanged, saveSettings } from "../storage/settings.ts";
+import type { ConfirmRequest, Settings, StepUpdate } from "../types.ts";
 
 const CONFIRM_COPY: Record<ConfirmRequest["kind"], { title: string; yes: string; no: string }> = {
   play: { title: "Play", yes: "Play it", no: "Don't play" },
   publish: { title: "Post", yes: "Post it", no: "Don't post" },
   risky: { title: "Check this", yes: "Do it", no: "Don't do it" },
+  scope: { title: "Another site", yes: "Allow for this run", no: "No" },
+  "more-steps": { title: "More steps", yes: "More steps", no: "Stop here" },
 };
 
 const settingsToggle = document.querySelector<HTMLButtonElement>("#settings-toggle")!;
@@ -46,14 +49,7 @@ const runButton = document.querySelector<HTMLButtonElement>("#run")!;
 const stopButton = document.querySelector<HTMLButtonElement>("#stop")!;
 const foot = document.querySelector<HTMLElement>("#foot")!;
 
-let settings: Settings = {
-  apiKey: "",
-  model: DEFAULT_MODEL,
-  backupModel: "",
-  baseUrl: "",
-  savedTasks: [],
-  sites: [],
-};
+let settings: Settings = emptySettings();
 let abort: AbortController | null = null;
 let resolveConfirm: ((approved: boolean) => void) | null = null;
 let resolvePlan: ((approved: boolean) => void) | null = null;
@@ -71,11 +67,23 @@ saveKeyButton.addEventListener("click", () => {
     return;
   }
   const allowed = target ? chrome.permissions.request({ origins: [target.pattern] }) : Promise.resolve(true);
-  settings.apiKey = apiKeyInput.value.trim() || settings.apiKey;
-  settings.model = modelInput.value.trim() || DEFAULT_MODEL;
-  settings.backupModel = backupModelInput.value.trim();
-  settings.baseUrl = baseUrl;
+  const typedKey = apiKeyInput.value.trim();
+  const model = modelInput.value.trim() || DEFAULT_MODEL;
+  const backupModel = backupModelInput.value.trim();
   apiKeyInput.value = "";
+  if (typedKey) settings.providers.openrouter.apiKey = typedKey;
+  if (baseUrl) {
+    settings.provider = "local";
+    settings.providers.local = { apiKey: "", model, backupModel, baseUrl };
+  } else {
+    settings.provider = "openrouter";
+    settings.providers.openrouter = {
+      apiKey: typedKey || settings.providers.openrouter.apiKey,
+      model,
+      backupModel,
+      baseUrl: "",
+    };
+  }
   void allowed
     .catch(() => false)
     .then(async (granted) => {
@@ -133,7 +141,10 @@ saveTaskButton.addEventListener("click", () => {
     taskNameInput.focus();
     return;
   }
-  settings.savedTasks = [...settings.savedTasks, { name, task: finishedTask }];
+  settings.savedTasks = [
+    ...settings.savedTasks,
+    { id: crypto.randomUUID(), name, task: finishedTask, createdAt: Date.now() },
+  ];
   taskNameInput.value = "";
   void saveSettings(settings);
   renderSavedTasks();
@@ -153,18 +164,27 @@ planStart.addEventListener("click", () => settlePlan(true));
 planCancel.addEventListener("click", () => settlePlan(false));
 
 void loadSettings().then((loaded) => {
-  settings = loaded;
-  modelInput.value = settings.model;
-  backupModelInput.value = settings.backupModel;
-  baseUrlInput.value = settings.baseUrl;
+  showSettings(loaded);
+  if (settings.sites.length === 0) {
+    addMessage("jeco", "Add a site in Settings. Jeco acts only on sites you allow.");
+  }
+  onSettingsChanged((next) => {
+    if (abort || JSON.stringify(next) === JSON.stringify(settings)) return;
+    showSettings(next);
+  });
+});
+
+function showSettings(next: Settings): void {
+  settings = next;
+  const active = settings.providers[settings.provider];
+  modelInput.value = active.model;
+  backupModelInput.value = active.backupModel;
+  baseUrlInput.value = settings.provider === "local" ? active.baseUrl : "";
   keyNote.textContent = readyNote();
   renderFoot();
   renderSites();
   renderSavedTasks();
-  if (settings.sites.length === 0) {
-    addMessage("jeco", "Add a site in Settings. Jeco acts only on sites you allow.");
-  }
-});
+}
 
 function renderSites(): void {
   sitesList.replaceChildren();
@@ -219,7 +239,7 @@ function renderSavedTasks(): void {
     remove.className = "text-button";
     remove.textContent = "Remove";
     remove.addEventListener("click", () => {
-      settings.savedTasks = settings.savedTasks.filter((item) => item !== saved);
+      settings.savedTasks = settings.savedTasks.filter((item) => item.id !== saved.id);
       void saveSettings(settings);
       renderSavedTasks();
     });
@@ -234,29 +254,34 @@ function updateSite(host: string, patch: { interact?: boolean; post?: boolean })
 }
 
 function readyToRun(): boolean {
-  if (settings.apiKey || settings.baseUrl) return true;
+  const active = settings.providers[settings.provider];
+  if (settings.provider === "local" ? active.baseUrl : active.apiKey) return true;
   settingsPanel.hidden = false;
   keyNote.textContent = "Add an OpenRouter key first, or a local base URL.";
   return false;
 }
 
 function readyNote(): string {
-  if (settings.baseUrl) return "Jeco will use the model server at the base URL.";
-  return settings.apiKey ? "A key is saved on this Mac." : "Add a key before running a task.";
+  if (settings.provider === "local" && settings.providers.local.baseUrl) {
+    return "Jeco will use the model server at the base URL.";
+  }
+  return settings.providers.openrouter.apiKey ? "A key is saved on this Mac." : "Add a key before running a task.";
 }
 
 function renderFoot(): void {
-  const target = settings.baseUrl ? baseUrlTarget(settings.baseUrl) : null;
+  const baseUrl = settings.provider === "local" ? settings.providers.local.baseUrl : "";
+  const target = baseUrl ? baseUrlTarget(baseUrl) : null;
   let where = "Page text from each step is sent to OpenRouter.";
-  if (target && "error" in target) where = `Page text from each step is sent to ${settings.baseUrl}.`;
+  if (target && "error" in target) where = `Page text from each step is sent to ${baseUrl}.`;
   else if (target?.local) where = `Page text stays on this Mac (local model at ${target.label}).`;
   else if (target) where = `Page text from each step is sent to ${target.label}.`;
   foot.textContent = `${where} Logins stay in Brave.`;
 }
 
 async function modelAllowed(): Promise<boolean> {
-  if (!settings.baseUrl) return true;
-  const target = baseUrlTarget(settings.baseUrl);
+  const baseUrl = settings.provider === "local" ? settings.providers.local.baseUrl : "";
+  if (!baseUrl) return true;
+  const target = baseUrlTarget(baseUrl);
   if ("error" in target) {
     addMessage("jeco", `${target.error} Fix the base URL in Settings.`);
     return false;
@@ -272,7 +297,7 @@ async function modelAllowed(): Promise<boolean> {
 function showConfirm(request: ConfirmRequest): Promise<boolean> {
   const copy = CONFIRM_COPY[request.kind];
   confirmTitle.textContent = copy.title;
-  confirmYes.textContent = copy.yes;
+  confirmYes.textContent = request.kind === "more-steps" ? `${request.extra} more steps` : copy.yes;
   confirmNo.textContent = copy.no;
   const lines = [confirmSummary(request)];
   if (!request.image && request.outlined) lines.push("The control is outlined in the tab.");
@@ -293,10 +318,17 @@ function showConfirm(request: ConfirmRequest): Promise<boolean> {
 
 function confirmSummary(request: ConfirmRequest): string {
   switch (request.kind) {
-    case "play":
-      return `Play on ${request.host}?\n\nControl: ${request.control}`;
+    case "play": {
+      const lines = [`Play on ${request.host}?`, `Control: ${request.control}`];
+      if (request.context) lines.push(request.context);
+      return lines.join("\n\n");
+    }
     case "risky":
       return `${request.reason}\n\nClick "${request.control}" on ${request.host}?`;
+    case "scope":
+      return `Jeco wants to use ${request.host} too. It was not in the plan.`;
+    case "more-steps":
+      return `Jeco used ${request.used} steps without finishing. Give it ${request.extra} more?`;
     case "publish": {
       if (request.text == null) {
         return `Click "${request.control}" on ${request.host}?\n\nThis publishes on ${request.host}. Jeco cannot show text for this click.`;
@@ -319,30 +351,30 @@ async function startTask(task: string): Promise<void> {
   stepsList.replaceChildren();
   addMessage("you", task);
   const browser = createBrowser(() => signal);
-  const chat = createOpenRouterClient(settings.apiKey, settings.model || DEFAULT_MODEL, {
-    backupModel: settings.backupModel,
-    baseUrl: settings.baseUrl,
-  });
+  const chat = createClient(settings);
   const result = await runTask({
     task,
     settings,
     browser,
     chat,
     signal,
-    onStep: upsertStep,
-    onPlan: (lines) => {
-      planLines.replaceChildren();
-      for (const line of lines) {
-        const item = document.createElement("li");
-        item.textContent = line;
-        planLines.append(item);
-      }
-      planBox.hidden = false;
-      return new Promise((resolve) => {
-        resolvePlan = resolve;
-      });
+    hooks: {
+      onStep: upsertStep,
+      onPlan: (plan) => {
+        planLines.replaceChildren();
+        for (const line of plan.lines) {
+          const item = document.createElement("li");
+          item.textContent = line;
+          planLines.append(item);
+        }
+        planBox.hidden = false;
+        return new Promise((resolve) => {
+          resolvePlan = resolve;
+        });
+      },
+      onConfirm: showConfirm,
+      onEvent: () => {},
     },
-    onConfirm: showConfirm,
   });
   planBox.hidden = true;
   confirmBox.hidden = true;

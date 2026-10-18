@@ -1,5 +1,5 @@
-import { fingerprint } from "./gate.ts";
-import type { BrowserPort, ConfirmRequest, PageElement, PageResult } from "./types.ts";
+import { fingerprint } from "../safety/gate.ts";
+import type { BrowserPort, ConfirmRequest, PageElement, PageResult } from "../types.ts";
 
 export type PostFlowInput = {
   browser: BrowserPort;
