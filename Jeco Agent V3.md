@@ -49,18 +49,27 @@ Jai asked for the V2 fixes first, before the Phase 1 groundwork. They are on bra
 - `runTask` takes `hooks`. `createClient(settings)` replaces `createOpenRouterClient`. Plan requests send `purpose: "plan"` and step requests send `purpose: "step"`.
 - Settings are schema 3. `migrateSettings` is pure. `loadSettings` writes back when it changes something. `onSettingsChanged` resyncs other panels.
 
+### Landed: Phase 3 safety that was still open (section 6.4 to 6.8)
+
+`npm test` passes 79/79. Risk tiers, the paired post, fingerprints, and one post per run were already in from the V2 fixes.
+
+- `inScope` lives in `safety/hosts.ts`. A navigate or link click to an allowlisted site outside the plan asks first. Approving adds that site for the rest of the run. A redirect off the plan goes back, and a new tab that lands off the plan is closed.
+- Page text sent to the model is wrapped as data. Injection-shaped text adds a warning, and later clicks, typing, and Enter on that site ask first.
+- `page/classify.ts` marks passwords, one-time codes, and payment fields. The gate and the page both refuse to type into them. Search boxes are safe to type in.
+- `find` searches the last read. `go_back` uses the browser back button. Enter is decided by the gate; the page action arrives in Phase 4.
+
 ### Deviations the next phase must absorb
 
 - The panel is still one file. The view split (`views/run.ts`, `cards.ts`, `settings.ts`, `saved.ts`, `history.ts`) waits until history and the provider screen exist, so it is not split twice.
 - `RecipeId` and `RunEvent` live in `src/types.ts`. Putting them in `recipes/types.ts` and `engine/journal.ts` would make those files and `types.ts` import each other.
-- `find`, `press_enter`, and `go_back` are in the `ToolCall` type, and the gate refuses them with "That action is not available yet." They are not in the tool list the model sees. Phase 4 implements them; `find` and `go_back` must be allowed before the Interact check (invariant I2).
+- `find` and `go_back` work, but they are not in the tool list the model sees until Phase 5. `press_enter` is allowed by the gate and still has no page action. Phase 4 adds that action.
 - `FrameRect` still has `viewportWidth`, and `ConfirmRequest` still has `outlined`. The preview crop uses them.
 - The page script is still the 3-call mechanism, not D10's single call. `PageCommand` does not yet include the Phase 4 ops (`enter`, `locate`, `items`, `links`, `waitFor`, `media`).
 - `pairPost` does not take recipe hints yet; recipes add them in Phase 7. `packHint` text is unchanged until then.
 - Prompt strings moved as they are. The JSON plan prompt is Phase 5. A model plan still has `scope: null` and no site list.
 - `createClient` runs OpenRouter or a local base URL. OpenAI and xAI wait for the provider registry in Phase 8.
 - The preview crop uses a minimum of 360 × 200 CSS px centered on the control (plus 24 px padding).
-- Not done yet, by design: plan-bound scope (6.4), untrusted-text wrapping (6.5), `find`, `press_enter`, `go_back`, recipes, history, provider presets, icons, and the keyboard shortcut. M3, M4, M5, M8 to M12 are still open.
+- Not done yet, by design: the Enter page action, recipes, history, provider presets, icons, and the keyboard shortcut. M3, M4, M5, M8 to M12 are still open.
 - `tests/fakes.ts` holds the shared fake browser, scripted chat client, `testSettings`, and `fakeHooks`. Extend those rather than writing new fakes.
 
 ---

@@ -29,6 +29,7 @@ export type FakePage = {
   field: PageElement;
   button: PageElement;
   text: string;
+  body: string;
   fieldGone: boolean;
   stale: Set<number>;
   rewrite?: (typed: string) => string;
@@ -55,6 +56,7 @@ export function fakeBrowser(url: string | null, patch: Partial<FakePage> = {}): 
     field,
     button,
     text: "",
+    body: "Hello",
     fieldGone: false,
     stale: new Set(),
     clearOnPost: true,
@@ -113,7 +115,7 @@ export function fakeBrowser(url: string | null, patch: Partial<FakePage> = {}): 
   function run(cmd: PageCommand): PageResult {
     switch (cmd.op) {
       case "read":
-        return { ok: true, op: "read", url: page.url ?? "", title: "Page", text: "Hello", elements: page.elements };
+        return { ok: true, op: "read", url: page.url ?? "", title: "Page", text: page.body, elements: page.elements };
       case "click":
       case "type": {
         if (page.stale.has(cmd.ref)) {

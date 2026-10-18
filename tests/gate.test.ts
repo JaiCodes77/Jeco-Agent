@@ -84,7 +84,7 @@ test("interaction is refused on a read-only site", () => {
 test("password and payment typing is denied", () => {
   for (const kind of ["password", "payment"] as const) {
     const decision = decide(call("type", { ref: 2, text: "secret" }), ctx({ elements: [field(2, kind, "Password")] }));
-    assert.match(reason(decision), /Password and payment/);
+    assert.match(reason(decision), /Password, code, and payment/);
   }
 });
 
@@ -193,6 +193,58 @@ test("finish is allowed and the step cap blocks further actions", () => {
     answer: "Done",
   });
   assert.equal(decide(call("read_page", {}), ctx({ stepsUsed: 13 })).kind, "deny");
+});
+
+test("navigation and link clicks outside the plan ask before leaving it", () => {
+  const planned = ctx({
+    sites: [youtube, { host: "wikipedia.org", interact: true, post: false }],
+    pageUrl: "https://en.wikipedia.org/wiki/Main_Page",
+    scope: ["wikipedia.org"],
+  });
+  assert.deepEqual(decide(call("navigate", { url: "https://www.youtube.com/feed" }), planned), {
+    allow: false,
+    kind: "confirm",
+    confirm: { kind: "scope", host: "youtube.com" },
+  });
+  const elements = [{ ref: 5, role: "link", name: "Video", kind: "link" as const, href: "https://m.youtube.com/watch?v=1" }];
+  const linked = decide(call("click", { ref: 5 }), { ...planned, elements });
+  assert.deepEqual(linked, {
+    allow: false,
+    kind: "confirm",
+    confirm: { kind: "scope", host: "youtube.com" },
+  });
+  assert.equal(decide(call("navigate", { url: "https://www.youtube.com/feed" }), ctx()).kind, "browser");
+});
+
+test("find and go_back stay available when interaction is off", () => {
+  const page = ctx({ sites: [readOnly], pageUrl: "https://example.com" });
+  assert.equal(decide(call("find", { text: "Search" }), page).kind, "browser");
+  assert.equal(decide(call("go_back", {}), page).kind, "browser");
+  assert.equal(decide(call("press_enter", { ref: 4 }), page).kind, "deny");
+  assert.match(reason(decide(call("go_back", {}), ctx({ pageUrl: null }))), /No tab is open/);
+});
+
+test("Enter is only for search boxes and single-line fields", () => {
+  const search = { ref: 2, role: "searchbox", name: "Search", kind: "search" as const };
+  const line = { ref: 3, role: "textbox", name: "Name", kind: "text" as const };
+  const multi = { ref: 5, role: "textbox", name: "Post", kind: "text" as const, multiline: true };
+  const elements = [search, line, multi];
+  assert.equal(decide(call("press_enter", { ref: 2 }), ctx({ elements })).kind, "browser");
+  assert.equal(decide(call("press_enter", { ref: 3 }), ctx({ elements })).kind, "browser");
+  assert.match(reason(decide(call("press_enter", { ref: 5 }), ctx({ elements }))), /single-line/);
+});
+
+test("a click asks when the page text looked like instructions", () => {
+  assert.deepEqual(decide(call("click", { ref: 4 }), ctx({ wary: true })), {
+    allow: false,
+    kind: "confirm",
+    confirm: {
+      kind: "risky",
+      host: "youtube.com",
+      control: "Search",
+      reason: "This page had text that looked like instructions to an AI.",
+    },
+  });
 });
 
 test("fingerprint keeps the name, kind, and link", () => {

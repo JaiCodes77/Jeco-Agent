@@ -43,6 +43,7 @@ test("controls get the tier from the plan", () => {
 test("text fields are never classified as risky", () => {
   assert.equal(classifyControl("Post", "text"), "safe");
   assert.equal(classifyControl("Delete account", "password"), "safe");
+  assert.equal(classifyControl("Delete", "search"), "safe");
 });
 
 test("links use the same tiers as buttons", () => {

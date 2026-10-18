@@ -1,5 +1,7 @@
 import { CONTROL_CAP, TEXT_CAP } from "../limits.ts";
+import { classifyKind, isMultiline, type ControlRecord } from "./classify.ts";
 import { classifyControl, normalizeLabel } from "../safety/risk.ts";
+import { stripInvisible } from "../safety/untrusted.ts";
 import type { ElementState, Fingerprint, FrameRect, PageCommand, PageElement, PageResult } from "../types.ts";
 
 type Found = {
@@ -84,7 +86,7 @@ function run(cmd: PageCommand | undefined): PageResult {
       if (!(target instanceof Element)) return target;
       const kind = kindOf(target);
       if (kind === "password" || kind === "payment") {
-        return { ok: false, error: "Password and payment fields are blocked." };
+        return { ok: false, error: "Password, code, and payment fields are blocked." };
       }
       writeText(target, cmd.text);
       return { ok: true, op: "type", detail: `Typed into control ${cmd.ref}.` };
@@ -130,9 +132,7 @@ function describe(el: Element, ref: number): PageElement {
   if (href) element.href = href;
   const state = stateOf(el);
   if (state.length > 0) element.state = state;
-  if (kind === "text" && (el instanceof HTMLTextAreaElement || (el as HTMLElement).isContentEditable)) {
-    element.multiline = true;
-  }
+  if (isMultiline(recordOf(el))) element.multiline = true;
   return element;
 }
 
@@ -224,22 +224,26 @@ function label(el: Element): string {
 }
 
 function clip(value: string): string {
-  return value.replace(/\s+/g, " ").trim().slice(0, 80);
+  return stripInvisible(value).replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
 function kindOf(el: Element): PageElement["kind"] {
-  if (el instanceof HTMLInputElement) {
-    const type = el.type.toLowerCase();
-    const hint = fieldHint(el);
-    if (type === "password" || /current-password|new-password|\bpassword\b/.test(hint)) return "password";
-    if (/cc-|card[-_ ]?number|\bcardnumber\b|\bcvv\b|\bcvc\b/.test(hint)) return "payment";
-    if (type === "submit" || type === "button" || type === "reset" || type === "image") return "button";
-    return "text";
-  }
-  if (el instanceof HTMLTextAreaElement || (el as HTMLElement).isContentEditable) return "text";
-  if (el instanceof HTMLAnchorElement || el.getAttribute("role") === "link") return "link";
-  if (el instanceof HTMLButtonElement || el.getAttribute("role") === "button") return "button";
-  return "other";
+  return classifyKind(recordOf(el));
+}
+
+function recordOf(el: Element): ControlRecord {
+  const input = el instanceof HTMLInputElement ? el : null;
+  return {
+    tag: el.tagName.toLowerCase(),
+    type: input?.type,
+    role: el.getAttribute("role"),
+    autocomplete: input?.autocomplete || el.getAttribute("autocomplete") || "",
+    name: input?.name || el.getAttribute("name") || "",
+    id: el.id,
+    placeholder: input?.placeholder || el.getAttribute("placeholder") || "",
+    ariaLabel: el.getAttribute("aria-label") || "",
+    contentEditable: (el as HTMLElement).isContentEditable,
+  };
 }
 
 function stateOf(el: Element): ElementState[] {
@@ -267,10 +271,6 @@ function roleOf(kind: PageElement["kind"]): string {
   if (kind === "text") return "textbox";
   if (kind === "other") return "control";
   return kind;
-}
-
-function fieldHint(el: HTMLInputElement): string {
-  return `${el.autocomplete} ${el.name} ${el.id} ${el.placeholder} ${el.getAttribute("aria-label") ?? ""}`.toLowerCase();
 }
 
 function publicLocation(): string {
