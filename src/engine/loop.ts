@@ -272,7 +272,7 @@ export async function runTask(options: {
     if (call.name === "ask_to_post") return post(call.args, step);
     if (call.name === "find") return findControls(call.args.text, step);
     if (call.name === "go_back") return goBack(step);
-    if (call.name === "press_enter") return "That action is not available yet.";
+    if (call.name === "press_enter") return pressEnter(call.args.ref, step);
 
     const element = elements.find((item) => item.ref === call.args.ref);
     if (!element) return "That control number is not on the page. Call read_page again.";
@@ -320,6 +320,19 @@ export async function runTask(options: {
     hooks.onStep({ n: step, label: matched.length > 0 ? `Found ${Math.min(matched.length, FIND_CAP)}` : "No match", state: matched.length > 0 ? "ok" : "no" });
     if (matched.length === 0) return `No control matches "${text}". Scroll and read again, or try another word.`;
     return matched.slice(0, FIND_CAP).map((item) => formatControl(item)).join("\n");
+  }
+
+  async function pressEnter(ref: number, step: number): Promise<string> {
+    if (!current) return "No tab is open. Use open_tab.";
+    const element = elements.find((item) => item.ref === ref);
+    if (!element) return "That control number is not on the page. Call read_page again.";
+    const name = element.name || String(element.ref);
+    hooks.onStep({ n: step, label: `Press Enter in "${name}"`, state: "run" });
+    const result = await browser.act(current.id, { op: "enter", ref: element.ref, expect: fingerprint(element) });
+    if (!result.ok) return failedAction(result.error, result.stale, step);
+    await browser.settle(current.id);
+    hooks.onStep({ n: step, label: `Pressed Enter in "${name}"`, state: "ok" });
+    return (await leftAllowlist(step)) ?? (result.op === "enter" ? result.detail : "Pressed Enter.");
   }
 
   async function goBack(step: number): Promise<string> {

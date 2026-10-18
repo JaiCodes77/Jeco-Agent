@@ -115,7 +115,15 @@ export function fakeBrowser(url: string | null, patch: Partial<FakePage> = {}): 
   function run(cmd: PageCommand): PageResult {
     switch (cmd.op) {
       case "read":
-        return { ok: true, op: "read", url: page.url ?? "", title: "Page", text: page.body, elements: page.elements };
+        return {
+          ok: true,
+          op: "read",
+          url: page.url ?? "",
+          title: "Page",
+          text: page.body,
+          elements: page.elements,
+          total: page.elements.length,
+        };
       case "click":
       case "type": {
         if (page.stale.has(cmd.ref)) {
@@ -132,6 +140,8 @@ export function fakeBrowser(url: string | null, patch: Partial<FakePage> = {}): 
       }
       case "scroll":
         return { ok: true, op: "scroll", detail: "Scrolled." };
+      case "enter":
+        return { ok: true, op: "enter", detail: `Pressed Enter in control ${cmd.ref}.` };
       case "frame":
         return { ok: true, op: "frame", rect: RECT };
       case "unframe":

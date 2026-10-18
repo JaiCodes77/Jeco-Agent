@@ -1,8 +1,9 @@
-import { CONTROL_CAP, TEXT_CAP } from "../limits.ts";
+import { CONTROL_SCAN_CAP, TEXT_CAP } from "../limits.ts";
 import { classifyKind, isMultiline, type ControlRecord } from "./classify.ts";
 import { classifyControl, normalizeLabel } from "../safety/risk.ts";
 import { stripInvisible } from "../safety/untrusted.ts";
 import type { ElementState, Fingerprint, FrameRect, PageCommand, PageElement, PageResult } from "../types.ts";
+import { PAGE_HANDS_VERSION } from "./version.ts";
 
 type Found = {
   el: Element;
@@ -10,8 +11,7 @@ type Found = {
 };
 
 const g = globalThis as unknown as {
-  __jecoCmd?: PageCommand;
-  __jecoResult?: PageResult;
+  __jeco?: { v: string; run(cmd: PageCommand): Promise<PageResult> };
 };
 
 const CONTROLS = [
@@ -20,9 +20,17 @@ const CONTROLS = [
   "input:not([type='hidden'])",
   "textarea",
   "select",
+  "summary",
   "[role='button']",
   "[role='link']",
   "[role='textbox']",
+  "[role='searchbox']",
+  "[role='combobox']",
+  "[role='checkbox']",
+  "[role='switch']",
+  "[role='tab']",
+  "[role='menuitem']",
+  "[role='option']",
   "[contenteditable='true']",
 ].join(",");
 
@@ -46,17 +54,17 @@ const TEAL = "#0f6e6b";
 const PREV_OUTLINE = "data-jeco-prev-outline";
 const BADGE = "data-jeco-badge";
 
-try {
-  g.__jecoResult = run(g.__jecoCmd);
-} catch (error) {
-  g.__jecoResult = {
-    ok: false,
-    error: error instanceof Error ? error.message : "The page script failed.",
-  };
+if (g.__jeco?.v !== PAGE_HANDS_VERSION) g.__jeco = { v: PAGE_HANDS_VERSION, run };
+
+async function run(cmd: PageCommand): Promise<PageResult> {
+  try {
+    return await perform(cmd);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "The page script failed." };
+  }
 }
 
-function run(cmd: PageCommand | undefined): PageResult {
-  if (!cmd) return { ok: false, error: "No command was sent to the page." };
+function perform(cmd: PageCommand): PageResult {
   switch (cmd.op) {
     case "read":
       return readPage();
@@ -81,6 +89,11 @@ function run(cmd: PageCommand | undefined): PageResult {
       activate(target);
       return { ok: true, op: "click", detail: `Clicked control ${cmd.ref}.` };
     }
+    case "enter": {
+      const target = verify(cmd.ref, cmd.expect);
+      if (!(target instanceof Element)) return target;
+      return pressEnter(target, cmd.ref);
+    }
     case "type": {
       const target = verify(cmd.ref, cmd.expect);
       if (!(target instanceof Element)) return target;
@@ -96,20 +109,20 @@ function run(cmd: PageCommand | undefined): PageResult {
 
 function readPage(): PageResult {
   document.querySelectorAll("[data-jeco-ref]").forEach((el) => el.removeAttribute("data-jeco-ref"));
-  const found = collect().slice(0, CONTROL_CAP);
+  const found = orderForReading(dedupe(collect())).slice(0, CONTROL_SCAN_CAP);
   found.forEach((item, index) => {
     item.element.ref = index + 1;
     item.el.setAttribute("data-jeco-ref", String(item.element.ref));
   });
-  const root = document.querySelector("main") ?? document.body;
-  const text = (root?.innerText ?? "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, TEXT_CAP);
+  document.documentElement.dataset.jecoNext = String(found.length + 1);
   return {
     ok: true,
     op: "read",
     url: publicLocation(),
     title: document.title,
-    text,
+    text: pageText(),
     elements: found.map((item) => item.element),
+    total: found.length,
   };
 }
 
@@ -187,9 +200,48 @@ function hrefKey(href: string | undefined): string {
 
 function visible(el: Element): boolean {
   const style = getComputedStyle(el);
-  if (style.display === "none" || style.visibility === "hidden") return false;
+  if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+  if (el.closest("[aria-hidden='true'], [inert]")) return false;
   const rect = el.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0;
+}
+
+function orderForReading(found: Found[]): Found[] {
+  const height = window.innerHeight;
+  const inView: Found[] = [];
+  const below: { item: Found; top: number }[] = [];
+  const above: { item: Found; top: number }[] = [];
+  for (const item of found) {
+    const rect = item.el.getBoundingClientRect();
+    if (rect.bottom > 0 && rect.top < height) {
+      item.element.inView = true;
+      inView.push(item);
+    } else if (rect.top >= height) below.push({ item, top: rect.top });
+    else above.push({ item, top: rect.top });
+  }
+  below.sort((a, b) => a.top - b.top);
+  return [...inView, ...below.map((entry) => entry.item), ...above.map((entry) => entry.item)];
+}
+
+function dedupe(found: Found[]): Found[] {
+  const seen = new Set<string>();
+  return found.filter((item) => {
+    if (!item.element.href) return true;
+    const key = `${normalizeLabel(item.element.name)} ${hrefKey(item.element.href)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function pageText(): string {
+  const nodes = ["main", "[role='main']", "article"].flatMap((selector) => {
+    const node = document.querySelector(selector);
+    return node ? [node] : [];
+  });
+  const roomy = nodes.find((node): node is HTMLElement => node instanceof HTMLElement && node.innerText.trim().length >= 200);
+  const root = roomy ?? document.body;
+  return (root?.innerText ?? "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, TEXT_CAP);
 }
 
 function label(el: Element): string {
@@ -415,6 +467,27 @@ function parsePrevious(raw: string | null): [string, string] {
     // An old or foreign value; fall back to clearing the outline.
   }
   return ["", ""];
+}
+
+function pressEnter(el: Element, ref: number): PageResult {
+  if (!(el instanceof HTMLElement)) return gone(ref);
+  el.focus();
+  const key = (type: string) =>
+    new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true });
+  const down = key("keydown");
+  el.dispatchEvent(down);
+  el.dispatchEvent(key("keypress"));
+  el.dispatchEvent(key("keyup"));
+  if (el instanceof HTMLInputElement && el.form) {
+    const secret = Array.from(el.form.elements).some((field) => {
+      if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return false;
+      const kind = kindOf(field);
+      return kind === "password" || kind === "payment";
+    });
+    if (secret) return { ok: false, error: "Enter is blocked in forms with password or payment fields." };
+    if (!down.defaultPrevented) el.form.requestSubmit();
+  }
+  return { ok: true, op: "enter", detail: `Pressed Enter in control ${ref}.` };
 }
 
 function activate(el: Element): void {

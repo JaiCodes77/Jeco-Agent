@@ -27,7 +27,7 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "read_page",
-      description: "Read the current page: title, visible text, and numbered controls.",
+      description: "Read the current page: title, visible text, and numbered controls (the first 80, visible ones first).",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -58,12 +58,44 @@ export const TOOLS = [
   {
     type: "function",
     function: {
+      name: "find",
+      description: "Search all controls from the latest read_page by label or link. Returns matching control numbers.",
+      parameters: {
+        type: "object",
+        properties: { text: { type: "string" } },
+        required: ["text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "press_enter",
+      description: "Press Enter in a numbered search box or single-line field, for example to run a search.",
+      parameters: {
+        type: "object",
+        properties: { ref: { type: "integer" } },
+        required: ["ref"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "scroll",
       description: "Scroll the current page vertically by dy pixels.",
       parameters: {
         type: "object",
         properties: { dy: { type: "integer" } },
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "go_back",
+      description: "Go back one page in the current tab.",
+      parameters: { type: "object", properties: {} },
     },
   },
   {

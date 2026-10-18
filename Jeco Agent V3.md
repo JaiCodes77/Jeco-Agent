@@ -58,18 +58,26 @@ Jai asked for the V2 fixes first, before the Phase 1 groundwork. They are on bra
 - `page/classify.ts` marks passwords, one-time codes, and payment fields. The gate and the page both refuse to type into them. Search boxes are safe to type in.
 - `find` searches the last read. `go_back` uses the browser back button. Enter is decided by the gate; the page action arrives in Phase 4.
 
+### Landed: Phase 4 eyes and hands that the general loop needs (section 7)
+
+`npm test` passes 80/80. Settle, framing, and the cropped preview were already in.
+
+- The page script installs once per tab and is called directly. A reload of the extension still picks up a new copy.
+- A read lists on-screen controls first, then ones below, then ones above. The model sees 80; `find` can search the rest of the scan.
+- `press_enter` focuses the field, sends Enter, and submits the form when that form has no password or payment field.
+- `find`, `press_enter`, and `go_back` are in the tool list the model sees.
+
 ### Deviations the next phase must absorb
 
 - The panel is still one file. The view split (`views/run.ts`, `cards.ts`, `settings.ts`, `saved.ts`, `history.ts`) waits until history and the provider screen exist, so it is not split twice.
 - `RecipeId` and `RunEvent` live in `src/types.ts`. Putting them in `recipes/types.ts` and `engine/journal.ts` would make those files and `types.ts` import each other.
-- `find` and `go_back` work, but they are not in the tool list the model sees until Phase 5. `press_enter` is allowed by the gate and still has no page action. Phase 4 adds that action.
 - `FrameRect` still has `viewportWidth`, and `ConfirmRequest` still has `outlined`. The preview crop uses them.
-- The page script is still the 3-call mechanism, not D10's single call. `PageCommand` does not yet include the Phase 4 ops (`enter`, `locate`, `items`, `links`, `waitFor`, `media`).
+- Shadow DOM is not walked yet (P1 in section 7.2). `locate`, `items`, `links`, `waitFor`, and `media` arrive with the recipes, which are the only callers.
 - `pairPost` does not take recipe hints yet; recipes add them in Phase 7. `packHint` text is unchanged until then.
 - Prompt strings moved as they are. The JSON plan prompt is Phase 5. A model plan still has `scope: null` and no site list.
 - `createClient` runs OpenRouter or a local base URL. OpenAI and xAI wait for the provider registry in Phase 8.
 - The preview crop uses a minimum of 360 × 200 CSS px centered on the control (plus 24 px padding).
-- Not done yet, by design: the Enter page action, recipes, history, provider presets, icons, and the keyboard shortcut. M3, M4, M5, M8 to M12 are still open.
+- Not done yet, by design: recipes, history, provider presets, icons, and the keyboard shortcut. M3, M4, M5, M8 to M12 are still open. M3 is partly addressed by listing on-screen controls first.
 - `tests/fakes.ts` holds the shared fake browser, scripted chat client, `testSettings`, and `fakeHooks`. Extend those rather than writing new fakes.
 
 ---

@@ -1,4 +1,5 @@
 import { NAV_TIMEOUT_MS, SETTLE_MAX_MS, SETTLE_QUIET_MS } from "../limits.ts";
+import { PAGE_HANDS_VERSION } from "../page/version.ts";
 import type { BrowserPort, FrameRect, PageCommand, PageResult } from "../types.ts";
 
 const LOAD_START_MS = 300;
@@ -37,26 +38,10 @@ export function createBrowser(getSignal: () => AbortSignal): BrowserPort {
     },
 
     async act(tabId, cmd) {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        func: (command: PageCommand) => {
-          (globalThis as unknown as { __jecoCmd?: PageCommand }).__jecoCmd = command;
-        },
-        args: [cmd],
-      });
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ["page-hands.js"],
-      });
-      const [got] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => (globalThis as unknown as { __jecoResult?: PageResult }).__jecoResult,
-      });
-      const result = got?.result;
-      if (!result || typeof result !== "object") {
-        return { ok: false, error: "The page did not return a result." };
-      }
-      return result as PageResult;
+      const first = await callPage(tabId, cmd);
+      if (first !== "__missing__") return asPageResult(first);
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["page-hands.js"] });
+      return asPageResult(await callPage(tabId, cmd));
     },
 
     async settle(tabId, opts = {}) {
@@ -103,6 +88,23 @@ export function createBrowser(getSignal: () => AbortSignal): BrowserPort {
       }
     },
   };
+}
+
+async function callPage(tabId: number, cmd: PageCommand): Promise<PageResult | "__missing__"> {
+  const [got] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (command: PageCommand, version: string) => {
+      const hands = (globalThis as unknown as { __jeco?: { v: string; run(cmd: PageCommand): Promise<PageResult> } }).__jeco;
+      return hands?.v === version ? hands.run(command) : "__missing__";
+    },
+    args: [cmd, PAGE_HANDS_VERSION],
+  });
+  return got?.result ?? "__missing__";
+}
+
+function asPageResult(value: PageResult | "__missing__" | undefined): PageResult {
+  if (value && typeof value === "object" && "ok" in value) return value;
+  return { ok: false, error: "The page did not return a result." };
 }
 
 function waitForNavigation(tabId: number, previousUrl: string | null, signal: AbortSignal): Promise<void> {

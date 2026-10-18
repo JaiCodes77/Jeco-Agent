@@ -60,6 +60,7 @@ export type PageCommand =
   | { op: "read" }
   | { op: "click"; ref: number; expect: Fingerprint }
   | { op: "type"; ref: number; text: string; expect: Fingerprint }
+  | { op: "enter"; ref: number; expect: Fingerprint }
   | { op: "scroll"; dy: number }
   | { op: "frame"; ref: number; label: string }
   | { op: "unframe" }
@@ -74,8 +75,9 @@ export type PageResult =
       title: string;
       text: string;
       elements: PageElement[];
+      total: number;
     }
-  | { ok: true; op: "click" | "type" | "scroll" | "unframe"; detail: string }
+  | { ok: true; op: "click" | "type" | "enter" | "scroll" | "unframe"; detail: string }
   | { ok: true; op: "frame"; rect: FrameRect }
   | { ok: true; op: "fieldText"; text: string; gone: boolean }
   | {

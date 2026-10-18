@@ -223,6 +223,19 @@ test("a suspicious read is wrapped and the next click asks", async () => {
   assert.equal(browser.commands.some((cmd) => cmd.op === "click"), false);
 });
 
+test("Enter is sent to the numbered field and then the page settles", async () => {
+  const browser = fakeBrowser("https://www.youtube.com", {
+    elements: [{ ref: 2, role: "searchbox", name: "Search", kind: "search" }],
+  });
+  await run(
+    browser,
+    scripted([turn("read_page"), turn("press_enter", { ref: 2 }), turn("finish", { answer: "Searched." })]),
+  );
+  const entered = browser.commands.find((cmd) => cmd.op === "enter");
+  assert.deepEqual(entered, { op: "enter", ref: 2, expect: { name: "Search", kind: "search" } });
+  assert.equal(browser.log[browser.log.indexOf("enter 2") + 1], "settle");
+});
+
 test("find searches the last read and refuses to run before one", async () => {
   const browser = fakeBrowser("https://www.youtube.com");
   const seen: ChatRequest[] = [];
