@@ -1,14 +1,13 @@
-import type { GateContext, GateDecision, PageElement, SiteGrant, ToolCall } from "./types.ts";
-
-const PUBLISH_NAMES = new Set([
-  "post",
-  "tweet",
-  "reply",
-  "repost",
-  "send",
-  "submit",
-  "publish",
-]);
+import { classifyControl, normalizeLabel } from "./risk.ts";
+import type {
+  ConfirmSpec,
+  Fingerprint,
+  GateContext,
+  GateDecision,
+  PageElement,
+  SiteGrant,
+  ToolCall,
+} from "./types.ts";
 
 const MAX_TEXT = 4000;
 
@@ -45,22 +44,10 @@ export function grantForUrl(url: string, sites: SiteGrant[]): SiteGrant | null {
   );
 }
 
-export function isPublishName(name: string): boolean {
-  const normalized = name.trim().toLowerCase().replace(/\s+/g, " ");
-  if (!normalized) return false;
-  if (PUBLISH_NAMES.has(normalized)) return true;
-  const first = normalized.split(" ")[0]?.replace(/[^a-z]/g, "") ?? "";
-  return PUBLISH_NAMES.has(first);
-}
-
-export function isPauseName(name: string): boolean {
-  const first = name.trim().toLowerCase().split(/\s+/)[0]?.replace(/[^a-z]/g, "") ?? "";
-  return first === "pause";
-}
-
-export function isPlayName(name: string): boolean {
-  const first = name.trim().toLowerCase().split(/\s+/)[0]?.replace(/[^a-z]/g, "") ?? "";
-  return first === "play";
+export function fingerprint(element: PageElement): Fingerprint {
+  return element.href
+    ? { name: element.name, kind: element.kind, href: element.href }
+    : { name: element.name, kind: element.kind };
 }
 
 export function parseToolCall(name: string, args: unknown): ToolCall | { error: string } {
@@ -95,9 +82,12 @@ export function parseToolCall(name: string, args: unknown): ToolCall | { error: 
       const text = stringField(record.text);
       if (!text) return { error: "ask_to_post needs the exact text to post." };
       if (text.length > MAX_TEXT) return { error: "That post is too long." };
-      const ref = record.ref == null ? undefined : refField(record.ref);
-      if (record.ref != null && ref == null) return { error: "ask_to_post ref must be a control number." };
-      return { name, args: ref == null ? { text } : { text, ref } };
+      const field = refField(record.field ?? record.ref);
+      if (field == null) return { error: "ask_to_post needs the number of the text field from read_page." };
+      if (record.button == null) return { name, args: { text, field } };
+      const button = refField(record.button);
+      if (button == null) return { error: "ask_to_post button must be a control number." };
+      return { name, args: { text, field, button } };
     }
     case "finish": {
       const answer = stringField(record.answer) ?? "";
@@ -114,135 +104,100 @@ export function decide(call: ToolCall, ctx: GateContext): GateDecision {
   }
 
   if (ctx.stepsUsed > ctx.stepCap) {
-    return { allow: false, kind: "deny", reason: `Stopped after ${ctx.stepCap} steps.` };
+    return deny(`Stopped after ${ctx.stepCap} steps.`);
   }
 
   if (call.name === "open_tab" || call.name === "navigate") {
-    const grant = grantForUrl(call.args.url, ctx.sites);
-    if (!grant) {
-      return {
-        allow: false,
-        kind: "deny",
-        reason: "That address is not on the allowlist. Add the site in Settings, or finish.",
-      };
+    if (!grantForUrl(call.args.url, ctx.sites)) {
+      return deny("That address is not on the allowlist. Add the site in Settings, or finish.");
     }
     return { allow: true, kind: "browser" };
   }
 
   const pageGrant = ctx.pageUrl ? grantForUrl(ctx.pageUrl, ctx.sites) : null;
   if (!pageGrant) {
-    return {
-      allow: false,
-      kind: "deny",
-      reason: "The current tab is not an allowed site. Open an allowed https page first.",
-    };
+    return deny("The current tab is not an allowed site. Open an allowed https page first.");
   }
+  const host = pageGrant.host;
 
   if (call.name === "read_page" || call.name === "scroll") {
     return { allow: true, kind: "browser" };
   }
 
   if (!pageGrant.interact) {
-    return {
-      allow: false,
-      kind: "deny",
-      reason: `${pageGrant.host} is read-only. Turn on interaction in Settings, or finish.`,
-    };
+    return deny(`${host} is read-only. Turn on interaction in Settings, or finish.`);
   }
 
   if (call.name === "ask_to_post") {
-    if (!pageGrant.post) {
-      return {
-        allow: false,
-        kind: "deny",
-        reason: `Posting is off for ${pageGrant.host}. Turn it on in Settings, or finish.`,
-      };
-    }
-    if (call.args.ref != null) {
-      const target = ctx.elements.find((item) => item.ref === call.args.ref);
-      if (!target) {
-        return {
-          allow: false,
-          kind: "deny",
-          reason: "That control number is not on the page. Call read_page again.",
-        };
+    if (!pageGrant.post) return deny(`Posting is off for ${host}. Turn it on in Settings, or finish.`);
+    if (ctx.posted) return deny("This run already posted once. Call finish.");
+    const field = ctx.elements.find((item) => item.ref === call.args.field);
+    if (!field || field.kind !== "text") return deny("ask_to_post needs a text field number from read_page.");
+    let control = "Post";
+    if (call.args.button != null) {
+      const button = ctx.elements.find((item) => item.ref === call.args.button);
+      if (!button || classifyControl(button.name, button.kind) !== "publish") {
+        return deny("That control cannot be used to post.");
       }
-      if (target.kind !== "text" && !isPublishName(target.name)) {
-        return {
-          allow: false,
-          kind: "deny",
-          reason: "That control cannot be used to post.",
-        };
-      }
+      control = button.name;
     }
-    return {
-      allow: false,
-      kind: "confirm",
-      summary: `Post this on ${pageGrant.host}?\n\n${call.args.text}`,
-    };
+    return confirm({
+      kind: "publish",
+      host,
+      control,
+      field: field.name,
+      text: call.args.text,
+      chars: call.args.text.length,
+    });
   }
 
   const element = ctx.elements.find((item) => item.ref === call.args.ref);
   if (!element) {
-    return {
-      allow: false,
-      kind: "deny",
-      reason: "That control number is not on the page. Call read_page again.",
-    };
+    return deny("That control number is not on the page. Call read_page again.");
+  }
+  if (element.state?.includes("disabled")) {
+    return deny("That control is disabled.");
   }
 
-  if (call.name === "type" && (element.kind === "password" || element.kind === "payment")) {
-    return {
-      allow: false,
-      kind: "deny",
-      reason: "Password and payment fields are blocked.",
-    };
-  }
-
-  if (call.name === "click" && isPauseName(element.name)) {
-    return {
-      allow: false,
-      kind: "deny",
-      reason: "Do not click Pause. If a control is named Play, click that once. Otherwise call finish.",
-    };
-  }
-
-  if (call.name === "click" && element.href && !grantForUrl(element.href, ctx.sites)) {
-    return {
-      allow: false,
-      kind: "deny",
-      reason: "That control leaves the allowlist.",
-    };
-  }
-
-  if (call.name === "click" && isPublishName(element.name)) {
-    if (!pageGrant.post) {
-      return {
-        allow: false,
-        kind: "deny",
-        reason: `Posting is off for ${pageGrant.host}. Use ask_to_post after posting is enabled, or finish.`,
-      };
+  if (call.name === "type") {
+    if (element.kind === "password" || element.kind === "payment") {
+      return deny("Password and payment fields are blocked.");
     }
-    return {
-      allow: false,
-      kind: "confirm",
-      summary: `Click "${element.name}" on ${pageGrant.host}?`,
-    };
+    return { allow: true, kind: "browser" };
   }
 
-  if (call.name === "click" && isPlayName(element.name)) {
-    return {
-      allow: false,
-      kind: "confirm",
-      summary: `Play "${element.name}" on ${pageGrant.host}?`,
-    };
+  if (element.href && !grantForUrl(element.href, ctx.sites)) {
+    return deny("That control leaves the allowlist.");
   }
 
-  return { allow: true, kind: "browser" };
+  switch (classifyControl(element.name, element.kind)) {
+    case "blocked":
+      return deny(
+        normalizeLabel(element.name).split(" ")[0] === "pause"
+          ? "Do not click Pause. If a control is named Play, click that once. Otherwise call finish."
+          : "Jeco never buys, pays, or changes account security. The user can do that themselves. Call finish.",
+      );
+    case "publish":
+      if (!pageGrant.post) {
+        return deny(`Posting is off for ${host}. Use ask_to_post after posting is enabled, or finish.`);
+      }
+      if (ctx.posted) return deny("This run already posted once. Call finish.");
+      return confirm({ kind: "publish", host, control: element.name });
+    case "play":
+      return confirm({ kind: "play", host, control: element.name });
+    case "risky":
+      return confirm({ kind: "risky", host, control: element.name, reason: `This changes something on ${host}.` });
+    default:
+      return { allow: true, kind: "browser" };
+  }
 }
 
-export function elementByRef(elements: PageElement[], ref: number): PageElement | undefined {
-  return elements.find((item) => item.ref === ref);
+function deny(reason: string): GateDecision {
+  return { allow: false, kind: "deny", reason };
+}
+
+function confirm(spec: ConfirmSpec): GateDecision {
+  return { allow: false, kind: "confirm", confirm: spec };
 }
 
 function stringField(value: unknown): string | null {

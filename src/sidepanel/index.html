@@ -35,7 +35,7 @@
         <span>Base URL</span>
         <input id="base-url" type="text" placeholder="optional local base URL" spellcheck="false" />
       </label>
-      <button type="button" id="save-key" class="button">Save key</button>
+      <button type="button" id="save-key" class="button">Save</button>
       <p id="key-note" class="note"></p>
 
       <div class="sites-head">
@@ -50,8 +50,8 @@
       <ul id="sites" class="sites"></ul>
     </section>
 
-    <ol id="steps" class="steps"></ol>
-    <div id="log" class="log"></div>
+    <ol id="steps" class="steps" aria-live="polite"></ol>
+    <div id="log" class="log" aria-live="polite"></div>
 
     <section id="plan" class="plan" hidden>
       <h2>Plan</h2>
@@ -89,7 +89,7 @@
         <button type="button" id="save-task" class="button" hidden>Save task</button>
       </div>
     </form>
-    <p class="foot">Page text from each step is sent to OpenRouter. Logins stay in Brave.</p>
+    <p id="foot" class="foot">Page text from each step is sent to OpenRouter. Logins stay in Brave.</p>
     <script src="panel.js"></script>
   </body>
 </html>

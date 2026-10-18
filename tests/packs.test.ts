@@ -21,7 +21,9 @@ test("play or watch plus a video uses the youtube pack without the word youtube"
 test("linkedin pack opens the composer and stops on ask_to_post", () => {
   const hint = packHint("Write a LinkedIn draft: We shipped the pack.");
   assert.match(hint, /https:\/\/www\.linkedin\.com\//);
-  assert.match(hint, /Find the composer, type the draft, then call ask_to_post with the exact text/);
+  assert.match(hint, /click the control that starts a new post/);
+  assert.match(hint, /call ask_to_post with the exact text and the composer field's number/i);
+  assert.equal(hint.includes("type the draft"), false);
   assert.match(hint, /Never click Post, Tweet, Reply, Send, Submit, or Publish yourself/);
   assert.equal(hint.includes("youtube.com"), false);
   assert.equal(hint.includes("https://x.com/"), false);

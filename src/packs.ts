@@ -50,7 +50,7 @@ function socialHint(task: string): string {
   if (!url) return "";
   return [
     `Open ${url}.`,
-    "Find the composer, type the draft, then call ask_to_post with the exact text. Never click Post, Tweet, Reply, Send, Submit, or Publish yourself.",
+    "Read the page. If no composer text field is open, click the control that starts a new post, then read again. Call ask_to_post with the exact text and the composer field's number. Jeco types it and asks the user. Never click Post, Tweet, Reply, Send, Submit, or Publish yourself.",
   ].join("\n");
 }
 

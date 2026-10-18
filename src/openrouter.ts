@@ -1,4 +1,4 @@
-import type { ChatClient, ChatMessage, ModelTurn } from "./types.ts";
+import type { ChatClient, ChatMessage, ChatRequest, ModelTurn } from "./types.ts";
 
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const FALLBACKS = [
@@ -79,11 +79,16 @@ const TOOLS = [
     type: "function",
     function: {
       name: "ask_to_post",
-      description: "Ask the user to confirm before anything is posted. Include the exact text.",
+      description:
+        "Ask the user to approve a post. Jeco types the exact text into the numbered text field, shows it, and presses the post button next to that field only after the user approves.",
       parameters: {
         type: "object",
-        properties: { text: { type: "string" }, ref: { type: "integer" } },
-        required: ["text"],
+        properties: {
+          text: { type: "string" },
+          field: { type: "integer", description: "The text field from read_page." },
+          button: { type: "integer", description: "Optional post button from read_page." },
+        },
+        required: ["text", "field"],
       },
     },
   },
@@ -101,43 +106,48 @@ const TOOLS = [
   },
 ];
 
-const PLAN_SYSTEM = "Reply with exactly 3 short lines of the plan. Do not call tools.";
+type ClientOptions = { backupModel?: string; baseUrl?: string };
 
-export function createOpenRouterClient(
-  apiKey: string,
-  model: string,
-  options?: { backupModel?: string; baseUrl?: string },
-): ChatClient {
-  return (messages, signal) => complete(apiKey, model, messages, signal, true, options);
+export type BaseUrlTarget = { pattern: string; label: string; local: boolean };
+
+export function createOpenRouterClient(apiKey: string, model: string, options?: ClientOptions): ChatClient {
+  return (request) => complete(apiKey, model, request, options);
 }
 
-/** One completion with tools left out, so a plan cannot open or click anything. */
-export function requestPlan(
-  apiKey: string,
-  model: string,
-  messages: ChatMessage[],
-  signal: AbortSignal,
-): Promise<ModelTurn> {
-  return complete(apiKey, model, messages, signal, false);
+export function baseUrlTarget(raw: string): BaseUrlTarget | { error: string } {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return { error: "Start the base URL with http:// or https://." };
+  }
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (url.protocol === "http:" && !local) {
+    return { error: "Use https, or a local address like http://localhost:11434/v1." };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return { error: "Start the base URL with http:// or https://." };
+  }
+  return { pattern: `${url.protocol}//${url.hostname}/*`, label: url.host, local };
 }
 
 async function complete(
   apiKey: string,
   model: string,
-  messages: ChatMessage[],
-  signal: AbortSignal,
-  includeTools = true,
-  options?: { backupModel?: string; baseUrl?: string },
+  request: ChatRequest,
+  options?: ClientOptions,
 ): Promise<ModelTurn> {
-  const withTools = includeTools && !isPlanRequest(messages);
+  const { messages, signal, tools } = request;
+  const baseUrl = options?.baseUrl?.trim() ?? "";
   const models = candidateModels(model, options);
-  const endpoint = chatEndpoint(options?.baseUrl);
+  const endpoint = chatEndpoint(baseUrl);
+  const server = baseUrl ? "The model server" : "OpenRouter";
   let lastError = "The free models are busy. Wait a minute and run the task again.";
   for (const candidate of models) {
     if (signal.aborted) throw new DOMException("Stopped.", "AbortError");
-    const response = await requestModel(apiKey, candidate, messages, signal, withTools, endpoint);
+    const response = await requestModel(apiKey, candidate, messages, signal, tools, endpoint, !baseUrl);
     if (response.ok) return readTurn(response);
-    const failure = await failureMessage(response);
+    const failure = await failureMessage(response, server, Boolean(baseUrl));
     lastError = failure;
     const busy = response.status === 429 || response.status === 404;
     if (!busy || /daily|per day/i.test(failure)) throw new Error(failure);
@@ -145,7 +155,7 @@ async function complete(
   throw new Error(lastError);
 }
 
-function candidateModels(model: string, options?: { backupModel?: string; baseUrl?: string }): string[] {
+function candidateModels(model: string, options?: ClientOptions): string[] {
   const backup = options?.backupModel?.trim() ?? "";
   const local = Boolean(options?.baseUrl?.trim());
   const models = [model];
@@ -157,7 +167,7 @@ function candidateModels(model: string, options?: { backupModel?: string; baseUr
   return models;
 }
 
-function chatEndpoint(baseUrl?: string): string {
+export function chatEndpoint(baseUrl?: string): string {
   const raw = baseUrl?.trim() ?? "";
   if (!raw) return ENDPOINT;
   const trimmed = raw.replace(/\/+$/, "");
@@ -172,39 +182,36 @@ async function requestModel(
   signal: AbortSignal,
   includeTools: boolean,
   endpoint: string,
+  openRouter: boolean,
 ): Promise<Response> {
   const body: Record<string, unknown> = {
     model,
     messages,
     temperature: 0.2,
-    reasoning: { enabled: false },
   };
+  if (openRouter) body.reasoning = { enabled: false };
   if (includeTools) {
     body.tools = TOOLS;
     body.tool_choice = "auto";
     body.parallel_tool_calls = false;
   }
 
-  let response = await post(apiKey, body, signal, endpoint);
+  let response = await post(apiKey, body, signal, endpoint, openRouter);
   if (response.status === 400) {
     const detail = await response.clone().text();
-    if (/reasoning/i.test(detail)) {
+    if (/reasoning/i.test(detail) && "reasoning" in body) {
       delete body.reasoning;
-      response = await post(apiKey, body, signal, endpoint);
+      response = await post(apiKey, body, signal, endpoint, openRouter);
     }
     if (includeTools && response.status === 400) {
       const again = await response.clone().text();
       if (/parallel_tool_calls/i.test(again)) {
         delete body.parallel_tool_calls;
-        response = await post(apiKey, body, signal, endpoint);
+        response = await post(apiKey, body, signal, endpoint, openRouter);
       }
     }
   }
   return response;
-}
-
-function isPlanRequest(messages: ChatMessage[]): boolean {
-  return messages.some((message) => message.role === "system" && message.content === PLAN_SYSTEM);
 }
 
 async function readTurn(response: Response): Promise<ModelTurn> {
@@ -227,29 +234,37 @@ async function post(
   body: Record<string, unknown>,
   signal: AbortSignal,
   endpoint: string,
+  openRouter: boolean,
 ): Promise<Response> {
-  return fetch(endpoint, {
-    method: "POST",
-    signal,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "X-Title": "Jeco Agent",
-    },
-    body: JSON.stringify(body),
-  });
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  if (openRouter) headers["X-Title"] = "Jeco Agent";
+  try {
+    return await fetch(endpoint, { method: "POST", signal, headers, body: JSON.stringify(body) });
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    if (!openRouter) {
+      throw new Error(
+        `Jeco could not reach the model server at ${new URL(endpoint).host}. Check that it is running, then press Save in Settings so Brave allows it.`,
+      );
+    }
+    throw new Error("Jeco could not reach OpenRouter. Check your connection.");
+  }
 }
 
-async function failureMessage(response: Response): Promise<string> {
+async function failureMessage(response: Response, server: string, local: boolean): Promise<string> {
   const detail = await response.text();
   const message = errorText(detail);
-  if (response.status === 401) return "OpenRouter rejected the key. Check it in Settings.";
+  if (response.status === 401) return `${server} rejected the key. Check it in Settings.`;
+  if (response.status === 403 && local) {
+    return `${server} refused Jeco. If you use Ollama, start it with OLLAMA_ORIGINS=chrome-extension://* so it accepts the extension.`;
+  }
   if (response.status === 429) {
     if (/daily|per day/i.test(message)) return "The free daily cap is used up. It resets tomorrow.";
     return "This free model is busy. Wait a minute and run the task again.";
   }
   if (response.status === 404) return `That model is unavailable. ${message}`;
-  return `OpenRouter returned ${response.status}. ${message}`;
+  return `${server} returned ${response.status}. ${message}`;
 }
 
 function errorText(detail: string): string {

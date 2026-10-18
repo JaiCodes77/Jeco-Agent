@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decide, grantForUrl, normalizeHost, parseToolCall } from "../src/gate.ts";
-import type { GateContext, PageElement, SiteGrant } from "../src/types.ts";
+import { decide, fingerprint, grantForUrl, normalizeHost, parseToolCall } from "../src/gate.ts";
+import type { GateContext, GateDecision, PageElement, SiteGrant, ToolCall } from "../src/types.ts";
 
 const youtube: SiteGrant = { host: "youtube.com", interact: true, post: false };
 const linkedin: SiteGrant = { host: "linkedin.com", interact: true, post: true };
@@ -14,16 +14,27 @@ function ctx(partial: Partial<GateContext> = {}): GateContext {
     elements: [button(4, "Search"), button(9, "Post"), field(3, "text", "Say something")],
     stepsUsed: 1,
     stepCap: 12,
+    posted: false,
     ...partial,
   };
 }
 
-function button(ref: number, name: string): PageElement {
-  return { ref, role: "button", name, kind: "button" };
+function button(ref: number, name: string, extra: Partial<PageElement> = {}): PageElement {
+  return { ref, role: "button", name, kind: "button", ...extra };
 }
 
 function field(ref: number, kind: PageElement["kind"], name: string): PageElement {
   return { ref, role: kind === "password" ? "password" : "textbox", name, kind };
+}
+
+function call(name: string, args: unknown): ToolCall {
+  const parsed = parseToolCall(name, args);
+  if ("error" in parsed) throw new Error(parsed.error);
+  return parsed;
+}
+
+function reason(decision: GateDecision): string {
+  return decision.kind === "deny" ? decision.reason : "";
 }
 
 test("normalizeHost strips www, path, and scheme", () => {
@@ -43,129 +54,149 @@ test("grantForUrl allows the site and its subdomains only over https", () => {
 });
 
 test("navigation to an allowlisted https url is allowed", () => {
-  const call = parseToolCall("open_tab", { url: "https://www.youtube.com/results?search_query=bach" });
-  assert.ok(!("error" in call));
-  if ("error" in call) return;
-  assert.deepEqual(decide(call, ctx({ pageUrl: "chrome://newtab" })), { allow: true, kind: "browser" });
+  const open = call("open_tab", { url: "https://www.youtube.com/results?search_query=bach" });
+  assert.deepEqual(decide(open, ctx({ pageUrl: "chrome://newtab" })), { allow: true, kind: "browser" });
 });
 
 test("navigation off the allowlist is denied", () => {
-  const call = parseToolCall("navigate", { url: "https://example.org/secret" });
-  assert.ok(!("error" in call));
-  if ("error" in call) return;
-  const decision = decide(call, ctx());
-  assert.equal(decision.kind, "deny");
+  assert.equal(decide(call("navigate", { url: "https://example.org/secret" }), ctx()).kind, "deny");
 });
 
 test("reading and scrolling need only an allowlisted page", () => {
-  const read = parseToolCall("read_page", {});
-  const scroll = parseToolCall("scroll", { dy: 9000 });
-  assert.ok(!("error" in read) && !("error" in scroll));
-  if ("error" in read || "error" in scroll || scroll.name !== "scroll") return;
+  const scroll = call("scroll", { dy: 9000 });
+  assert.ok(scroll.name === "scroll");
   assert.equal(scroll.args.dy, 2000);
-  assert.equal(decide(read, ctx({ sites: [readOnly], pageUrl: "https://example.com" })).kind, "browser");
+  assert.equal(decide(call("read_page", {}), ctx({ sites: [readOnly], pageUrl: "https://example.com" })).kind, "browser");
   assert.equal(decide(scroll, ctx({ sites: [readOnly], pageUrl: "https://news.example.com" })).kind, "browser");
 });
 
 test("interaction is refused on a read-only site", () => {
-  const call = parseToolCall("click", { ref: 4 });
-  assert.ok(!("error" in call));
-  if ("error" in call) return;
-  const decision = decide(call, ctx({ sites: [readOnly], pageUrl: "https://example.com", elements: [button(4, "Search")] }));
+  const decision = decide(
+    call("click", { ref: 4 }),
+    ctx({ sites: [readOnly], pageUrl: "https://example.com", elements: [button(4, "Search")] }),
+  );
   assert.equal(decision.kind, "deny");
 });
 
 test("password and payment typing is denied", () => {
   for (const kind of ["password", "payment"] as const) {
-    const call = parseToolCall("type", { ref: 2, text: "secret" });
-    assert.ok(!("error" in call));
-    if ("error" in call) return;
-    const decision = decide(call, ctx({ elements: [field(2, kind, "Password")] }));
-    assert.equal(decision.kind, "deny");
-    if (decision.kind === "deny") assert.match(decision.reason, /Password and payment/);
+    const decision = decide(call("type", { ref: 2, text: "secret" }), ctx({ elements: [field(2, kind, "Password")] }));
+    assert.match(reason(decision), /Password and payment/);
   }
 });
 
-test("a publish click confirms when posting is on and denies when it is off", () => {
-  const call = parseToolCall("click", { ref: 9 });
-  assert.ok(!("error" in call));
-  if ("error" in call) return;
-  assert.equal(decide(call, ctx({ pageUrl: "https://www.linkedin.com/feed" })).kind, "confirm");
-  const denied = decide(call, ctx());
-  assert.equal(denied.kind, "deny");
+test("a disabled control is denied", () => {
+  const elements = [button(4, "Search", { state: ["disabled"] })];
+  assert.match(reason(decide(call("click", { ref: 4 }), ctx({ elements }))), /disabled/);
 });
 
-test("ask_to_post confirms with the exact text only when posting is on", () => {
-  const call = parseToolCall("ask_to_post", { text: "Hello from Jeco" });
-  assert.ok(!("error" in call));
-  if ("error" in call) return;
-  const confirmed = decide(call, ctx({ pageUrl: "https://www.linkedin.com/feed" }));
-  assert.equal(confirmed.kind, "confirm");
-  if (confirmed.kind === "confirm") assert.match(confirmed.summary, /Hello from Jeco/);
-  assert.equal(decide(call, ctx()).kind, "deny");
+test("a publish click confirms when posting is on and denies when it is off", () => {
+  const click = call("click", { ref: 9 });
+  assert.deepEqual(decide(click, ctx({ pageUrl: "https://www.linkedin.com/feed" })), {
+    allow: false,
+    kind: "confirm",
+    confirm: { kind: "publish", host: "linkedin.com", control: "Post" },
+  });
+  assert.equal(decide(click, ctx()).kind, "deny");
+});
+
+test("ask_to_post needs a text field and confirms with the exact text", () => {
+  const post = call("ask_to_post", { text: "Hello from Jeco", field: 3 });
+  assert.deepEqual(decide(post, ctx({ pageUrl: "https://www.linkedin.com/feed" })), {
+    allow: false,
+    kind: "confirm",
+    confirm: {
+      kind: "publish",
+      host: "linkedin.com",
+      control: "Post",
+      field: "Say something",
+      text: "Hello from Jeco",
+      chars: 15,
+    },
+  });
+  assert.equal(decide(post, ctx()).kind, "deny");
+});
+
+test("ask_to_post refuses a field that is not text and a button that cannot post", () => {
+  const onLinkedin = ctx({ pageUrl: "https://www.linkedin.com/feed" });
+  assert.match(reason(decide(call("ask_to_post", { text: "Hi", field: 4 }), onLinkedin)), /text field/);
+  assert.match(
+    reason(decide(call("ask_to_post", { text: "Hi", field: 3, button: 4 }), onLinkedin)),
+    /cannot be used to post/,
+  );
+  const named = decide(call("ask_to_post", { text: "Hi", field: 3, button: 9 }), onLinkedin);
+  assert.equal(named.kind === "confirm" && named.confirm.kind === "publish" ? named.confirm.control : "", "Post");
+});
+
+test("ask_to_post parsing needs a field and still accepts the V2 ref", () => {
+  assert.ok("error" in parseToolCall("ask_to_post", { text: "Hi" }));
+  assert.deepEqual(parseToolCall("ask_to_post", { text: "Hi", ref: 3 }), {
+    name: "ask_to_post",
+    args: { text: "Hi", field: 3 },
+  });
+  assert.ok("error" in parseToolCall("ask_to_post", { text: "Hi", field: 3, button: "Post" }));
+});
+
+test("only one post is allowed per run", () => {
+  const onLinkedin = ctx({ pageUrl: "https://www.linkedin.com/feed", posted: true });
+  assert.match(reason(decide(call("ask_to_post", { text: "Again", field: 3 }), onLinkedin)), /already posted/);
+  assert.match(reason(decide(call("click", { ref: 9 }), onLinkedin)), /already posted/);
 });
 
 test("a missing control and an unknown tool are denied", () => {
-  const click = parseToolCall("click", { ref: 99 });
-  assert.ok(!("error" in click));
-  if ("error" in click) return;
-  assert.equal(decide(click, ctx()).kind, "deny");
-  const unknown = parseToolCall("eval", { code: "alert(1)" });
-  assert.ok("error" in unknown);
+  assert.equal(decide(call("click", { ref: 99 }), ctx()).kind, "deny");
+  assert.ok("error" in parseToolCall("eval", { code: "alert(1)" }));
 });
 
 test("a publish-like name confirms, and a link off the allowlist is denied", () => {
-  const reply = parseToolCall("click", { ref: 8 });
-  assert.ok(!("error" in reply));
-  if ("error" in reply) return;
   const elements = [
     button(8, "Reply to Ada"),
     { ref: 5, role: "link", name: "Elsewhere", kind: "link" as const, href: "https://evil.example/out" },
   ];
-  assert.equal(decide(reply, ctx({ pageUrl: "https://www.linkedin.com/feed", elements })).kind, "confirm");
-  const leave = parseToolCall("click", { ref: 5 });
-  assert.ok(!("error" in leave));
-  if ("error" in leave) return;
-  const decision = decide(leave, ctx({ pageUrl: "https://www.linkedin.com/feed", elements }));
-  assert.equal(decision.kind, "deny");
-  if (decision.kind === "deny") assert.match(decision.reason, /allowlist/);
+  const page = ctx({ pageUrl: "https://www.linkedin.com/feed", elements });
+  assert.equal(decide(call("click", { ref: 8 }), page).kind, "confirm");
+  assert.match(reason(decide(call("click", { ref: 5 }), page)), /allowlist/);
 });
 
-test("Play (k) confirms on an allowlisted interactive site and Pause stays denied", () => {
-  const play = parseToolCall("click", { ref: 7 });
-  assert.ok(!("error" in play));
-  if ("error" in play) return;
-  const confirmed = decide(play, ctx({ elements: [button(7, "Play (k)")] }));
-  assert.deepEqual(confirmed, {
+test("Play (k) confirms and Pause stays denied", () => {
+  assert.deepEqual(decide(call("click", { ref: 7 }), ctx({ elements: [button(7, "Play (k)")] })), {
     allow: false,
     kind: "confirm",
-    summary: 'Play "Play (k)" on youtube.com?',
+    confirm: { kind: "play", host: "youtube.com", control: "Play (k)" },
   });
-
-  const pause = parseToolCall("click", { ref: 8 });
-  assert.ok(!("error" in pause));
-  if ("error" in pause) return;
-  const denied = decide(pause, ctx({ elements: [button(8, "Pause (k)")] }));
-  assert.equal(denied.kind, "deny");
-  if (denied.kind === "deny") assert.match(denied.reason, /Pause/);
+  assert.match(reason(decide(call("click", { ref: 8 }), ctx({ elements: [button(8, "Pause (k)")] }))), /Pause/);
 });
 
-test("a pause control is refused", () => {
-  const call = parseToolCall("click", { ref: 8 });
-  assert.ok(!("error" in call));
-  if ("error" in call) return;
-  const decision = decide(call, ctx({ elements: [button(8, "Pause (k)")] }));
-  assert.equal(decision.kind, "deny");
-  if (decision.kind === "deny") assert.match(decision.reason, /Pause/);
+test("risky clicks confirm and blocked clicks are refused even with posting on", () => {
+  const risky = decide(call("click", { ref: 6 }), ctx({ elements: [button(6, "Unsubscribe")] }));
+  assert.deepEqual(risky, {
+    allow: false,
+    kind: "confirm",
+    confirm: { kind: "risky", host: "youtube.com", control: "Unsubscribe", reason: "This changes something on youtube.com." },
+  });
+  for (const name of ["Buy now", "Delete account", "Checkout"]) {
+    const decision = decide(
+      call("click", { ref: 6 }),
+      ctx({ pageUrl: "https://www.linkedin.com/feed", elements: [button(6, name)] }),
+    );
+    assert.match(reason(decision), /never buys, pays, or changes account security/, name);
+  }
 });
 
 test("finish is allowed and the step cap blocks further actions", () => {
-  const finish = parseToolCall("finish", { answer: "Done" });
-  assert.ok(!("error" in finish));
-  if ("error" in finish) return;
-  assert.deepEqual(decide(finish, ctx({ stepsUsed: 40 })), { allow: true, kind: "finish", answer: "Done" });
-  const read = parseToolCall("read_page", {});
-  assert.ok(!("error" in read));
-  if ("error" in read) return;
-  assert.equal(decide(read, ctx({ stepsUsed: 13 })).kind, "deny");
+  assert.deepEqual(decide(call("finish", { answer: "Done" }), ctx({ stepsUsed: 40 })), {
+    allow: true,
+    kind: "finish",
+    answer: "Done",
+  });
+  assert.equal(decide(call("read_page", {}), ctx({ stepsUsed: 13 })).kind, "deny");
+});
+
+test("fingerprint keeps the name, kind, and link", () => {
+  assert.deepEqual(fingerprint(button(1, "Post")), { name: "Post", kind: "button" });
+  assert.deepEqual(fingerprint({ ref: 2, role: "link", name: "Home", kind: "link", href: "https://x.com/home" }), {
+    name: "Home",
+    kind: "link",
+    href: "https://x.com/home",
+  });
 });

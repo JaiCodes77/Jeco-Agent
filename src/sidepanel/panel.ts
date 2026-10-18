@@ -1,10 +1,16 @@
 import { createBrowser } from "../browser.ts";
 import { normalizeHost } from "../gate.ts";
 import { runTask, type StepUpdate } from "../loop.ts";
-import { createOpenRouterClient } from "../openrouter.ts";
+import { baseUrlTarget, createOpenRouterClient } from "../openrouter.ts";
 import { loadSettings, saveSettings } from "../storage.ts";
-import type { Settings } from "../types.ts";
+import type { ConfirmRequest, Settings } from "../types.ts";
 import { DEFAULT_MODEL } from "../types.ts";
+
+const CONFIRM_COPY: Record<ConfirmRequest["kind"], { title: string; yes: string; no: string }> = {
+  play: { title: "Play", yes: "Play it", no: "Don't play" },
+  publish: { title: "Post", yes: "Post it", no: "Don't post" },
+  risky: { title: "Check this", yes: "Do it", no: "Don't do it" },
+};
 
 const settingsToggle = document.querySelector<HTMLButtonElement>("#settings-toggle")!;
 const settingsPanel = document.querySelector<HTMLElement>("#settings")!;
@@ -38,6 +44,7 @@ const saveTaskButton = document.querySelector<HTMLButtonElement>("#save-task")!;
 const savedTasksList = document.querySelector<HTMLElement>("#saved-tasks")!;
 const runButton = document.querySelector<HTMLButtonElement>("#run")!;
 const stopButton = document.querySelector<HTMLButtonElement>("#stop")!;
+const foot = document.querySelector<HTMLElement>("#foot")!;
 
 let settings: Settings = {
   apiKey: "",
@@ -57,14 +64,29 @@ settingsToggle.addEventListener("click", () => {
 });
 
 saveKeyButton.addEventListener("click", () => {
+  const baseUrl = baseUrlInput.value.trim();
+  const target = baseUrl ? baseUrlTarget(baseUrl) : null;
+  if (target && "error" in target) {
+    keyNote.textContent = target.error;
+    return;
+  }
+  const allowed = target ? chrome.permissions.request({ origins: [target.pattern] }) : Promise.resolve(true);
   settings.apiKey = apiKeyInput.value.trim() || settings.apiKey;
   settings.model = modelInput.value.trim() || DEFAULT_MODEL;
   settings.backupModel = backupModelInput.value.trim();
-  settings.baseUrl = baseUrlInput.value.trim();
+  settings.baseUrl = baseUrl;
   apiKeyInput.value = "";
-  void saveSettings(settings).then(() => {
-    keyNote.textContent = settings.apiKey ? "Key saved on this Mac." : "Add a key before running a task.";
-  });
+  void allowed
+    .catch(() => false)
+    .then(async (granted) => {
+      await saveSettings(settings);
+      renderFoot();
+      if (target && !granted) {
+        keyNote.textContent = `Saved, but Brave did not allow Jeco to reach ${target.label}. Press Save again to allow it.`;
+      } else {
+        keyNote.textContent = readyNote();
+      }
+    });
 });
 
 addSiteForm.addEventListener("submit", (event) => {
@@ -96,12 +118,7 @@ addSiteForm.addEventListener("submit", (event) => {
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
   const task = taskInput.value.trim();
-  if (!task || abort) return;
-  if (!settings.apiKey) {
-    settingsPanel.hidden = false;
-    keyNote.textContent = "Add an OpenRouter key first.";
-    return;
-  }
+  if (!task || abort || !readyToRun()) return;
   taskInput.value = "";
   void startTask(task);
 });
@@ -140,7 +157,8 @@ void loadSettings().then((loaded) => {
   modelInput.value = settings.model;
   backupModelInput.value = settings.backupModel;
   baseUrlInput.value = settings.baseUrl;
-  keyNote.textContent = settings.apiKey ? "A key is saved on this Mac." : "Add a key before running a task.";
+  keyNote.textContent = readyNote();
+  renderFoot();
   renderSites();
   renderSavedTasks();
   if (settings.sites.length === 0) {
@@ -193,12 +211,7 @@ function renderSavedTasks(): void {
     run.className = "button";
     run.textContent = "Run";
     run.addEventListener("click", () => {
-      if (!saved.task || abort) return;
-      if (!settings.apiKey) {
-        settingsPanel.hidden = false;
-        keyNote.textContent = "Add an OpenRouter key first.";
-        return;
-      }
+      if (!saved.task || abort || !readyToRun()) return;
       void startTask(saved.task);
     });
     const remove = document.createElement("button");
@@ -220,7 +233,85 @@ function updateSite(host: string, patch: { interact?: boolean; post?: boolean })
   void saveSettings(settings);
 }
 
+function readyToRun(): boolean {
+  if (settings.apiKey || settings.baseUrl) return true;
+  settingsPanel.hidden = false;
+  keyNote.textContent = "Add an OpenRouter key first, or a local base URL.";
+  return false;
+}
+
+function readyNote(): string {
+  if (settings.baseUrl) return "Jeco will use the model server at the base URL.";
+  return settings.apiKey ? "A key is saved on this Mac." : "Add a key before running a task.";
+}
+
+function renderFoot(): void {
+  const target = settings.baseUrl ? baseUrlTarget(settings.baseUrl) : null;
+  let where = "Page text from each step is sent to OpenRouter.";
+  if (target && "error" in target) where = `Page text from each step is sent to ${settings.baseUrl}.`;
+  else if (target?.local) where = `Page text stays on this Mac (local model at ${target.label}).`;
+  else if (target) where = `Page text from each step is sent to ${target.label}.`;
+  foot.textContent = `${where} Logins stay in Brave.`;
+}
+
+async function modelAllowed(): Promise<boolean> {
+  if (!settings.baseUrl) return true;
+  const target = baseUrlTarget(settings.baseUrl);
+  if ("error" in target) {
+    addMessage("jeco", `${target.error} Fix the base URL in Settings.`);
+    return false;
+  }
+  const granted = await chrome.permissions.contains({ origins: [target.pattern] }).catch(() => false);
+  if (!granted) {
+    settingsPanel.hidden = false;
+    addMessage("jeco", `Allow Jeco to reach ${target.label}: press Save in Settings.`);
+  }
+  return granted;
+}
+
+function showConfirm(request: ConfirmRequest): Promise<boolean> {
+  const copy = CONFIRM_COPY[request.kind];
+  confirmTitle.textContent = copy.title;
+  confirmYes.textContent = copy.yes;
+  confirmNo.textContent = copy.no;
+  const lines = [confirmSummary(request)];
+  if (!request.image && request.outlined) lines.push("The control is outlined in the tab.");
+  confirmText.textContent = lines.join("\n\n");
+  if (request.image) {
+    confirmImage.src = request.image;
+    confirmImage.hidden = false;
+  } else {
+    confirmImage.removeAttribute("src");
+    confirmImage.hidden = true;
+  }
+  confirmBox.hidden = false;
+  confirmNo.focus();
+  return new Promise((resolve) => {
+    resolveConfirm = resolve;
+  });
+}
+
+function confirmSummary(request: ConfirmRequest): string {
+  switch (request.kind) {
+    case "play":
+      return `Play on ${request.host}?\n\nControl: ${request.control}`;
+    case "risky":
+      return `${request.reason}\n\nClick "${request.control}" on ${request.host}?`;
+    case "publish": {
+      if (request.text == null) {
+        return `Click "${request.control}" on ${request.host}?\n\nThis publishes on ${request.host}. Jeco cannot show text for this click.`;
+      }
+      const detail = `${request.chars ?? request.text.length} characters, typed into "${request.field ?? "the field"}". Jeco will press "${request.control}".`;
+      return [`Post this on ${request.host}?`, request.text, detail, request.warn].filter(Boolean).join("\n\n");
+    }
+  }
+}
+
 async function startTask(task: string): Promise<void> {
+  if (!(await modelAllowed())) {
+    if (!taskInput.value) taskInput.value = task;
+    return;
+  }
   abort = new AbortController();
   const signal = abort.signal;
   setBusy(true);
@@ -251,23 +342,7 @@ async function startTask(task: string): Promise<void> {
         resolvePlan = resolve;
       });
     },
-    onConfirm: (summary, image) => {
-      const playing = summary.startsWith("Play ");
-      confirmTitle.textContent = playing ? "Play" : "Post";
-      confirmYes.textContent = playing ? "Play it" : "Post it";
-      confirmText.textContent = summary;
-      if (image) {
-        confirmImage.src = image;
-        confirmImage.hidden = false;
-      } else {
-        confirmImage.removeAttribute("src");
-        confirmImage.hidden = true;
-      }
-      confirmBox.hidden = false;
-      return new Promise((resolve) => {
-        resolveConfirm = resolve;
-      });
-    },
+    onConfirm: showConfirm,
   });
   planBox.hidden = true;
   confirmBox.hidden = true;

@@ -21,6 +21,36 @@ This file is the full spec for the implementing agent. Read all of it before wri
 
 ---
 
+## Progress (read this before Phase 1)
+
+### Landed: "P0, fix V2's broken parts" (section 2.1 item 1)
+
+Jai asked for the V2 fixes first, before the Phase 1 groundwork. They are on branch `v3` in one commit after the plan commit. `npm run typecheck` is clean, `npm test` passes 60/60, and `npm run build` is green.
+
+| Finding | Fix as built |
+| --- | --- |
+| H1 | `ask_to_post` takes `{ text, field, button? }`. A new `pairPost` page op finds the button in the same dialog, form, or ancestor (up to 8 levels) as the field, and it must be publish tier. The flow in `src/post-flow.ts`: type, verify the text, refresh the button, preview, confirm, re-verify (a second confirm if the user edited it), click with a fingerprint, then check the field emptied. `commitPost` and `clickNamed` are gone. |
+| H2 | `src/risk.ts` holds the tiers from 6.1. The gate confirms `risky` and `play`, confirms `publish` only when posting is on, and refuses `blocked` even when Post is on. One post per run (`posted` in `GateContext`). Disabled controls are denied. |
+| H3 | Click and type send `expect: fingerprint(element)`. The page re-describes the control and returns `stale: true` on a mismatch or a missing control, and the loop then clears its elements so the model must read again. |
+| H4 | `activeTab` is in the manifest. `capture(tabId, rect)` returns null unless the tab is active, then crops around the control. `frame` adds an outline and a fixed badge in the page; `unframe` restores the old outline and removes the badge, always in a `finally`. The card says "The control is outlined in the tab." when there is no picture. |
+| H5 | Optional host permissions for `http://localhost/*` and `http://127.0.0.1/*`. Save calls `chrome.permissions.request` for the base URL inside the click handler. A run works with a base URL and no key; no `Authorization` header without a key; `reasoning` and `X-Title` only for OpenRouter; a 403 from a local server shows the Ollama `OLLAMA_ORIGINS` hint. |
+| H6 | `browser.settle()`: wait for a load that starts within 300 ms, then for DOM quiet (400 ms quiet, 2.5 s max). It runs after open, navigate, click, and type (type uses 200/1000). |
+| M1 | The plan prompt lives only in `loop.ts`, and plan requests send `tools: false` through `ChatRequest`. The approved plan is in the first user message. A failed plan request falls back to the built-in plan. |
+| M2 | `ConfirmRequest` is a tagged union (`play`, `publish`, `risky`); the panel renders by `kind` and focuses the negative button. |
+| M6 | A capped run returns `status: "capped"`. Save task shows only for `done`. |
+| M7 | `waitForNavigation` registers before `tabs.update` and counts "saw loading, then complete" as done even when the URL did not change. |
+| Low | Dead code removed, "Save" label, footer names where page text goes, version 0.3.0, `minimum_chrome_version` 120, tests typechecked (`@types/node` dev dependency), `aria-live` on steps and log, type step label names the field. |
+
+### Deviations the next phase must absorb
+
+- The fixes landed before the Phase 1 moves. `src/risk.ts` and `src/post-flow.ts` are flat files; move them to `safety/risk.ts` and `engine/post-flow.ts` in Phase 1. The page script is still the 3-call mechanism, not D10's single call.
+- `pairPost` does not take recipe hints yet; recipes add them in Phase 7.
+- The preview crop uses a minimum of 360 × 200 CSS px centered on the control (plus 24 px padding), so small buttons still show context.
+- Not done yet, by design: the plan JSON contract and plan-bound scope (6.4), untrusted-text wrapping (6.5), `find`, `press_enter`, `go_back`, recipes, history, provider presets, icons, and the keyboard shortcut. M3, M4, M5, M8 to M12 are still open.
+- `tests/fakes.ts` holds the shared fake browser and scripted chat client; extend it rather than writing new fakes.
+
+---
+
 ## 1. Where V2 actually stands
 
 Baseline: commit `de4466e` on `main`. `npm test` passes 27/27, and `npm run typecheck` is clean. The codebase is about 2,650 lines.

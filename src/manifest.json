@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Jeco Agent",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "A local Brave side panel that acts on sites you allow.",
-  "permissions": ["sidePanel", "storage", "tabs", "scripting"],
+  "minimum_chrome_version": "120",
+  "permissions": ["sidePanel", "storage", "tabs", "scripting", "activeTab"],
   "host_permissions": ["https://openrouter.ai/*"],
-  "optional_host_permissions": ["https://*/*"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
   "background": {
     "service_worker": "background.js"
   },
