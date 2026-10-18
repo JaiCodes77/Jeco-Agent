@@ -1,5 +1,37 @@
-import { CONTROL_CAP, TEXT_CAP } from "../limits.ts";
-import type { PageElement } from "../types.ts";
+import { CONTROL_CAP, MODEL_CHAR_BUDGET, TEXT_CAP } from "../limits.ts";
+import type { ChatMessage, PageElement } from "../types.ts";
+
+export type MessageMeta = { kind: "snapshot"; url: string; title: string } | null;
+
+const TRIMMED = " …[trimmed]";
+
+export function compact(messages: ChatMessage[], meta: MessageMeta[], budget = MODEL_CHAR_BUDGET): ChatMessage[] {
+  const copy = messages.map((message) => ({ ...message }));
+  let latest = -1;
+  meta.forEach((item, index) => {
+    if (item?.kind === "snapshot") latest = index;
+  });
+  meta.forEach((item, index) => {
+    if (item?.kind === "snapshot" && index !== latest) {
+      copy[index] = {
+        ...copy[index],
+        content: `[Earlier read of "${item.title}" at ${item.url}. A newer read replaced it.]`,
+      };
+    }
+  });
+  for (let index = 0; index < copy.length && weight(copy) > budget; index += 1) {
+    const message = copy[index];
+    if (!message || message.role !== "tool" || index === latest) continue;
+    const content = message.content ?? "";
+    if (content.length <= 300 || content.endsWith(TRIMMED)) continue;
+    copy[index] = { ...message, content: `${content.slice(0, 300)}${TRIMMED}` };
+  }
+  return copy;
+}
+
+function weight(messages: ChatMessage[]): number {
+  return messages.reduce((total, message) => total + (message.content?.length ?? 0), 0);
+}
 
 export function formatSnapshot(input: {
   url: string;

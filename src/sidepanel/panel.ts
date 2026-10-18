@@ -31,6 +31,7 @@ const stepsList = document.querySelector<HTMLOListElement>("#steps")!;
 const log = document.querySelector<HTMLElement>("#log")!;
 const planBox = document.querySelector<HTMLElement>("#plan")!;
 const planLines = document.querySelector<HTMLOListElement>("#plan-lines")!;
+const planExtra = document.querySelector<HTMLElement>("#plan-extra")!;
 const planStart = document.querySelector<HTMLButtonElement>("#plan-start")!;
 const planCancel = document.querySelector<HTMLButtonElement>("#plan-cancel")!;
 const confirmBox = document.querySelector<HTMLElement>("#confirm")!;
@@ -367,6 +368,11 @@ async function startTask(task: string): Promise<void> {
           item.textContent = line;
           planLines.append(item);
         }
+        const sites = plan.sites.length > 0 ? plan.sites.join(", ") : "any you allowed";
+        const extra = [`Sites: ${sites}`];
+        if (plan.missing.length > 0) extra.push(`Not allowed yet: ${plan.missing.join(", ")}. Add it in Settings.`);
+        if (plan.recipeTitle) extra.push(`Recipe: ${plan.recipeTitle}`);
+        planExtra.textContent = extra.join(" ");
         planBox.hidden = false;
         return new Promise((resolve) => {
           resolvePlan = resolve;

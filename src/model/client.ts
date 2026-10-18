@@ -1,3 +1,4 @@
+import { MODEL_TIMEOUT_MS } from "../limits.ts";
 import type { ChatClient, ChatMessage, ChatRequest, ModelTurn, Settings } from "../types.ts";
 import { TOOLS } from "./tools.ts";
 
@@ -10,8 +11,8 @@ const FALLBACKS = [
 
 export type BaseUrlTarget = { pattern: string; label: string; local: boolean };
 
-export function createClient(settings: Settings): ChatClient {
-  return (request) => complete(settings, request);
+export function createClient(settings: Settings, options?: { timeoutMs?: number }): ChatClient {
+  return (request) => complete(settings, request, options?.timeoutMs ?? MODEL_TIMEOUT_MS);
 }
 
 export function baseUrlTarget(raw: string): BaseUrlTarget | { error: string } {
@@ -31,7 +32,7 @@ export function baseUrlTarget(raw: string): BaseUrlTarget | { error: string } {
   return { pattern: `${url.protocol}//${url.hostname}/*`, label: url.host, local };
 }
 
-async function complete(settings: Settings, request: ChatRequest): Promise<ModelTurn> {
+async function complete(settings: Settings, request: ChatRequest, timeoutMs: number): Promise<ModelTurn> {
   const config = settings.providers[settings.provider];
   const openRouter = settings.provider === "openrouter";
   const local = settings.provider === "local";
@@ -47,18 +48,50 @@ async function complete(settings: Settings, request: ChatRequest): Promise<Model
     const candidate = models[index];
     if (signal.aborted) throw new DOMException("Stopped.", "AbortError");
     request.onAttempt?.(candidate, index);
-    const response = await requestModel(config.apiKey, candidate, messages, signal, tools, endpoint, openRouter);
+    const attempt = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+    let response: Response;
+    try {
+      response = await requestModel(config.apiKey, candidate, messages, attempt, tools, endpoint, openRouter);
+    } catch (error) {
+      if (signal.aborted) throw new DOMException("Stopped.", "AbortError");
+      if (isAbort(error)) {
+        lastError = "The model took too long to answer.";
+        skipped.push(candidate);
+        continue;
+      }
+      if (error instanceof TypeError) {
+        lastError = networkMessage(openRouter, endpoint);
+        skipped.push(candidate);
+        continue;
+      }
+      throw error;
+    }
     if (response.ok) {
       const turn = await readTurn(response);
       return { ...turn, model: candidate, provider: settings.provider, ms: Date.now() - started, skipped };
     }
     const failure = await failureMessage(response, server, local);
     lastError = failure;
-    const busy = response.status === 429 || response.status === 404;
-    if (!busy || /daily|per day/i.test(failure)) throw new Error(failure);
+    if (stopNow(response.status, failure)) throw new Error(failure);
     skipped.push(candidate);
   }
   throw new Error(lastError);
+}
+
+function stopNow(status: number, failure: string): boolean {
+  if (status === 429 && /daily|per day/i.test(failure)) return true;
+  return ![408, 429, 404, 500, 502, 503, 504].includes(status);
+}
+
+function networkMessage(openRouter: boolean, endpoint: string): string {
+  if (!openRouter) {
+    return `Jeco could not reach the model server at ${new URL(endpoint).host}. Check that it is running, then press Save in Settings so Brave allows it.`;
+  }
+  return "Jeco could not reach OpenRouter. Check your connection.";
+}
+
+function isAbort(error: unknown): boolean {
+  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
 function candidateModels(model: string, backupModel: string, openRouter: boolean): string[] {
@@ -102,19 +135,14 @@ async function requestModel(
   }
 
   let response = await post(apiKey, body, signal, endpoint, openRouter);
-  if (response.status === 400) {
+  for (let round = 0; round < 2 && response.status === 400; round += 1) {
     const detail = await response.clone().text();
-    if (/reasoning/i.test(detail) && "reasoning" in body) {
-      delete body.reasoning;
-      response = await post(apiKey, body, signal, endpoint, openRouter);
-    }
-    if (includeTools && response.status === 400) {
-      const again = await response.clone().text();
-      if (/parallel_tool_calls/i.test(again)) {
-        delete body.parallel_tool_calls;
-        response = await post(apiKey, body, signal, endpoint, openRouter);
-      }
-    }
+    const removable = ["reasoning", "parallel_tool_calls", "temperature", "tool_choice"].filter(
+      (name) => name in body && new RegExp(name, "i").test(detail),
+    );
+    if (removable.length === 0) break;
+    for (const name of removable) delete body[name];
+    response = await post(apiKey, body, signal, endpoint, openRouter);
   }
   return response;
 }
@@ -144,23 +172,14 @@ async function post(
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   if (openRouter) headers["X-Title"] = "Jeco Agent";
-  try {
-    return await fetch(endpoint, { method: "POST", signal, headers, body: JSON.stringify(body) });
-  } catch (error) {
-    if (!(error instanceof TypeError)) throw error;
-    if (!openRouter) {
-      throw new Error(
-        `Jeco could not reach the model server at ${new URL(endpoint).host}. Check that it is running, then press Save in Settings so Brave allows it.`,
-      );
-    }
-    throw new Error("Jeco could not reach OpenRouter. Check your connection.");
-  }
+  return await fetch(endpoint, { method: "POST", signal, headers, body: JSON.stringify(body) });
 }
 
 async function failureMessage(response: Response, server: string, local: boolean): Promise<string> {
   const detail = await response.text();
   const message = errorText(detail);
   if (response.status === 401) return `${server} rejected the key. Check it in Settings.`;
+  if (response.status === 402) return `This model needs credits on ${server}.`;
   if (response.status === 403 && local) {
     return `${server} refused Jeco. If you use Ollama, start it with OLLAMA_ORIGINS=chrome-extension://* so it accepts the extension.`;
   }

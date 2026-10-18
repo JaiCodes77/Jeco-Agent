@@ -67,6 +67,16 @@ Jai asked for the V2 fixes first, before the Phase 1 groundwork. They are on bra
 - `press_enter` focuses the field, sends Enter, and submits the form when that form has no password or payment field.
 - `find`, `press_enter`, and `go_back` are in the tool list the model sees.
 
+### Landed: Phase 5, a steadier model loop (section 8)
+
+`npm test` passes 105/105.
+
+- A model that is busy, missing, or too slow is skipped. A bad key, a daily cap, or a model that needs credits stops the run.
+- Old page reads are shortened before they are sent. The newest read stays whole.
+- A plan is JSON when the model writes it, and names the sites it will use. If the request fails, the backup plan is shown instead.
+- After 12 steps, Jeco asks for 6 more. Declining stops the run. Repeating the same action three times is pointed out.
+- A tool call written as text is still carried out.
+
 ### Deviations the next phase must absorb
 
 - The panel is still one file. The view split (`views/run.ts`, `cards.ts`, `settings.ts`, `saved.ts`, `history.ts`) waits until history and the provider screen exist, so it is not split twice.
@@ -74,7 +84,7 @@ Jai asked for the V2 fixes first, before the Phase 1 groundwork. They are on bra
 - `FrameRect` still has `viewportWidth`, and `ConfirmRequest` still has `outlined`. The preview crop uses them.
 - Shadow DOM is not walked yet (P1 in section 7.2). `locate`, `items`, `links`, `waitFor`, and `media` arrive with the recipes, which are the only callers.
 - `pairPost` does not take recipe hints yet; recipes add them in Phase 7. `packHint` text is unchanged until then.
-- Prompt strings moved as they are. The JSON plan prompt is Phase 5. A model plan still has `scope: null` and no site list.
+- Prompt strings are the V3 text. The plan card shows the sites. A recipe can still replace the plan in Phase 7; until then every plan comes from the model or the backup lines.
 - `createClient` runs OpenRouter or a local base URL. OpenAI and xAI wait for the provider registry in Phase 8.
 - The preview crop uses a minimum of 360 × 200 CSS px centered on the control (plus 24 px padding).
 - Not done yet, by design: recipes, history, provider presets, icons, and the keyboard shortcut. M3, M4, M5, M8 to M12 are still open. M3 is partly addressed by listing on-screen controls first.

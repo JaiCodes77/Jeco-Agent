@@ -56,7 +56,7 @@ test("the plan is asked for without tools and a declined plan touches nothing", 
   const result = await run(browser, scripted([turn("open_tab", { url: "https://www.youtube.com" })], seen), {
     plan: async (plan) => {
       assert.deepEqual([...plan.lines], ["Check the page", "Do the task", "Finish with the answer"]);
-      assert.equal(plan.source, "model");
+      assert.equal(plan.source, "fallback");
       assert.equal(plan.scope, null);
       return false;
     },
@@ -65,7 +65,7 @@ test("the plan is asked for without tools and a declined plan touches nothing", 
   assert.equal(seen.length, 1);
   assert.equal(seen[0].tools, false);
   assert.equal(seen[0].purpose, "plan");
-  assert.match(seen[0].messages[0].content ?? "", /exactly 3 short lines of the plan/);
+  assert.match(seen[0].messages[0].content ?? "", /Reply with JSON only/);
   assert.equal(browser.opened.length, 0);
   assert.equal(browser.commands.length, 0);
 });
@@ -78,7 +78,7 @@ test("the approved plan is sent with the task", async () => {
   assert.ok(step);
   assert.equal(
     step.messages[1].content,
-    "Do the thing\n\nApproved plan:\n1. Check the page\n2. Do the task\n3. Finish with the answer",
+    "Do the thing\n\nApproved plan:\n1. Check the page\n2. Do the task\n3. Finish with the answer\nSites: youtube.com",
   );
 });
 
@@ -99,8 +99,54 @@ test("a failed plan request falls back to the built-in plan", async () => {
 test("running out of steps is reported as capped, not done", async () => {
   const browser = fakeBrowser("https://www.youtube.com");
   const turns = Array.from({ length: STEP_CAP }, (_, index) => turn("read_page", {}, `r${index}`));
-  const result = await run(browser, scripted(turns));
+  let asked = false;
+  const result = await run(browser, scripted(turns), {
+    confirm: (request) => {
+      asked = request.kind === "more-steps" && request.used === STEP_CAP && request.extra === 6;
+      return false;
+    },
+  });
+  assert.equal(asked, true);
   assert.deepEqual(result, { status: "capped", text: `Stopped after ${STEP_CAP} steps without finishing.` });
+});
+
+test("approving more steps lets the run finish", async () => {
+  const browser = fakeBrowser("https://www.youtube.com");
+  const turns = [
+    ...Array.from({ length: STEP_CAP }, (_, index) => turn("read_page", {}, `r${index}`)),
+    turn("finish", { answer: "Done with more." }),
+  ];
+  const result = await run(browser, scripted(turns), {
+    confirm: (request) => request.kind === "more-steps",
+  });
+  assert.deepEqual(result, { status: "done", text: "Done with more." });
+});
+
+test("the third identical action is flagged", async () => {
+  const browser = fakeBrowser("https://www.youtube.com");
+  const seen: ChatRequest[] = [];
+  await run(
+    browser,
+    scripted(
+      [turn("read_page", {}, "a"), turn("read_page", {}, "b"), turn("read_page", {}, "c"), turn("finish", { answer: "Enough." })],
+      seen,
+    ),
+  );
+  const replies = toolReplies(seen);
+  assert.equal(/repeated the same action/.test(replies[0]), false);
+  assert.equal(/repeated the same action/.test(replies[1]), false);
+  assert.match(replies[2], /You repeated the same action 3 times/);
+});
+
+test("a tool call written as text is still run", async () => {
+  const browser = fakeBrowser("https://www.youtube.com");
+  const spoken = {
+    ...turn("finish"),
+    content: '<tool_call>{"name":"finish","arguments":{"answer":"From text."}}</tool_call>',
+    toolCalls: [],
+  };
+  const result = await run(browser, scripted([spoken]));
+  assert.deepEqual(result, { status: "done", text: "From text." });
 });
 
 test("clicks carry the fingerprint and wait for the page to settle", async () => {

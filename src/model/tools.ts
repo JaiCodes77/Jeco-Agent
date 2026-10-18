@@ -103,7 +103,7 @@ export const TOOLS = [
     function: {
       name: "ask_to_post",
       description:
-        "Ask the user to approve a post. Jeco types the exact text into the numbered text field, shows it, and presses the post button next to that field only after the user approves.",
+        "Ask the user to approve a post. Jeco types the exact text into the field, shows it, and presses the post button only after the user approves.",
       parameters: {
         type: "object",
         properties: {
